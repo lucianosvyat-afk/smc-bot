@@ -24,7 +24,7 @@ def get_top_volatile(ex, top_n=5):
             if not t.get("quoteVolume"): continue
             volatility=abs(t["percentage"])  # % движения за 24ч
             volume=t["quoteVolume"]          # объём в USDT
-            if volume < 10_000_000: continue  # минимум $10M объёма
+            if volume < 1_000_000: continue  # минимум $1M объёма
             pairs.append({
                 "symbol": symbol,
                 "volatility": volatility,
@@ -33,6 +33,7 @@ def get_top_volatile(ex, top_n=5):
             })
         # Сортируем по волатильности
         pairs.sort(key=lambda x: x["volatility"], reverse=True)
+        print(f"  Найдено пар: {len(pairs)}")
         top=pairs[:top_n]
         print(f"\n📊 Топ {top_n} волатильных пар:")
         for i,p in enumerate(top,1):
