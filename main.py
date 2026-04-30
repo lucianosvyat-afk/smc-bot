@@ -4,7 +4,8 @@ from datetime import datetime
 LTF="15m"; HTF="1h"
 LEVERAGE=10; RISK_PERCENT=1.0; TP_RR=2.0
 START_BALANCE=1000.0; SWING_LOOKBACK=5
-TOP_PAIRS=5  # сколько топ волатильных пар торговать
+TOP_PAIRS=5
+UPDATE_PAIRS_EVERY=30
 
 def connect():
     print("Подключаюсь к OKX...")
@@ -12,6 +13,16 @@ def connect():
     ex.load_markets()
     print("Подключён!")
     return ex
+
+def fetch(ex,sym,tf,limit=150):
+    raw=ex.fetch_ohlcv(sym,tf,limit=limit)
+    df=pd.DataFrame(raw,columns=["ts","open","high","low","close","volume"])
+    df["ts"]=pd.to_datetime(df["ts"],unit="ms")
+    df.set_index("ts",inplace=True)
+    return df
+
+def get_price(ex,sym):
+    return ex.fetch_ticker(sym)["last"]
 
 def get_top_volatile(ex, top_n=5):
     try:
@@ -22,7 +33,7 @@ def get_top_volatile(ex, top_n=5):
             if not t.get("percentage"): continue
             volatility=abs(t.get("percentage",0))
             volume=t.get("quoteVolume",0) or 0
-            if volatility < 1: continue  # минимум 1% движения
+            if volatility < 1: continue
             pairs.append({
                 "symbol": symbol,
                 "volatility": volatility,
@@ -33,17 +44,13 @@ def get_top_volatile(ex, top_n=5):
         top=pairs[:top_n]
         print(f"  Найдено пар: {len(pairs)}, беру топ {top_n}")
         for i,p in enumerate(top,1):
-            print(f"  {i}. {p['symbol']} | {p['change']:+.1f}% | Vol: ${p['volume']/1e6:.0f}M")
+            print(f"  {i}. {p['symbol']} | {p['change']:+.1f}%")
         if not top:
-            print("  Используем пары по умолчанию")
             return ["BTC/USDT:USDT","ETH/USDT:USDT","SOL/USDT:USDT","BNB/USDT:USDT","XRP/USDT:USDT"]
         return [p["symbol"] for p in top]
     except Exception as e:
         print(f"Ошибка получения пар: {e}")
         return ["BTC/USDT:USDT","ETH/USDT:USDT","SOL/USDT:USDT"]
-
-def get_price(ex,sym):
-    return ex.fetch_ticker(sym)["last"]
 
 def swings(df,n=5):
     df=df.copy()
@@ -132,12 +139,10 @@ class Trader:
         print(f"📈 Сделок:  {total}")
         print(f"{'─'*45}")
 
-# ── Запуск ─────────────────────────────────────────
 ex=connect()
 trader=Trader()
 scan=0
 symbols=[]
-UPDATE_PAIRS_EVERY=30  # обновлять топ пары каждые 30 сканов (30 мин)
 
 print(f"\nSMC BOT запущен! Баланс: {START_BALANCE} USDT")
 print(f"Автовыбор топ {TOP_PAIRS} волатильных пар каждые {UPDATE_PAIRS_EVERY} минут\n")
@@ -145,18 +150,14 @@ print(f"Автовыбор топ {TOP_PAIRS} волатильных пар ка
 while True:
     try:
         scan+=1
-
-        # Обновляем список волатильных пар каждые N сканов
         if scan==1 or scan%UPDATE_PAIRS_EVERY==0:
             print(f"\n🔄 Обновляю список волатильных пар...")
             symbols=get_top_volatile(ex, TOP_PAIRS)
-
-        # Сканируем каждую пару
         for symbol in symbols:
             try:
                 price=get_price(ex,symbol)
                 print(f"\n[{datetime.now().strftime('%H:%M:%S')}] {symbol}: {price:.4f}")
-                trader.check(price, symbol)
+                trader.check(price,symbol)
                 if trader.pos and trader.pos.get("symbol")==symbol:
                     print(f"  ⏳ {trader.pos['side'].upper()} @ {trader.pos['entry']:.4f} | SL:{trader.pos['sl']:.4f} | TP:{trader.pos['tp']:.4f}")
                 else:
@@ -169,10 +170,8 @@ while True:
             except Exception as e:
                 print(f"  Ошибка {symbol}: {e}")
                 continue
-
         if scan%5==0: trader.status()
         time.sleep(60)
-
     except KeyboardInterrupt:
         print("\nОстановлен.")
         trader.status()
