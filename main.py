@@ -14,41 +14,33 @@ def connect():
     return ex
 
 def get_top_volatile(ex, top_n=5):
-    """Находит топ N самых волатильных пар по объёму и движению за 24ч"""
     try:
         tickers=ex.fetch_tickers()
         pairs=[]
         for symbol, t in tickers.items():
-            if not symbol.endswith("/USDT:USDT"): continue
+            if "USDT:USDT" not in symbol: continue
             if not t.get("percentage"): continue
-            if not t.get("quoteVolume"): continue
-            volatility=abs(t["percentage"])  # % движения за 24ч
-            volume=t["quoteVolume"]          # объём в USDT
-            if volume < 1_000_000: continue  # минимум $1M объёма
+            volatility=abs(t.get("percentage",0))
+            volume=t.get("quoteVolume",0) or 0
+            if volatility < 1: continue  # минимум 1% движения
             pairs.append({
                 "symbol": symbol,
                 "volatility": volatility,
                 "volume": volume,
                 "change": t["percentage"]
             })
-        # Сортируем по волатильности
         pairs.sort(key=lambda x: x["volatility"], reverse=True)
-        print(f"  Найдено пар: {len(pairs)}")
         top=pairs[:top_n]
-        print(f"\n📊 Топ {top_n} волатильных пар:")
+        print(f"  Найдено пар: {len(pairs)}, беру топ {top_n}")
         for i,p in enumerate(top,1):
-            print(f"  {i}. {p['symbol']} | Движение: {p['change']:+.1f}% | Объём: ${p['volume']/1e6:.0f}M")
+            print(f"  {i}. {p['symbol']} | {p['change']:+.1f}% | Vol: ${p['volume']/1e6:.0f}M")
+        if not top:
+            print("  Используем пары по умолчанию")
+            return ["BTC/USDT:USDT","ETH/USDT:USDT","SOL/USDT:USDT","BNB/USDT:USDT","XRP/USDT:USDT"]
         return [p["symbol"] for p in top]
     except Exception as e:
         print(f"Ошибка получения пар: {e}")
         return ["BTC/USDT:USDT","ETH/USDT:USDT","SOL/USDT:USDT"]
-
-def fetch(ex,sym,tf,limit=150):
-    raw=ex.fetch_ohlcv(sym,tf,limit=limit)
-    df=pd.DataFrame(raw,columns=["ts","open","high","low","close","volume"])
-    df["ts"]=pd.to_datetime(df["ts"],unit="ms")
-    df.set_index("ts",inplace=True)
-    return df
 
 def get_price(ex,sym):
     return ex.fetch_ticker(sym)["last"]
@@ -83,7 +75,7 @@ def signal(ex,symbol,trend):
     last=df.iloc[-1]; pprev=df.iloc[-3]
     sfp=(trend=="bullish" and last["low"]<pprev["low"] and last["close"]>pprev["low"]) or \
         (trend=="bearish" and last["high"]>pprev["high"] and last["close"]<pprev["high"])
-    if ote and sfp:
+    if ote or sfp:
         if trend=="bullish":
             sl=l.iloc[-1]*0.999; tp=price+(price-sl)*TP_RR
             return {"side":"buy","entry":price,"sl":sl,"tp":tp,"symbol":symbol}
