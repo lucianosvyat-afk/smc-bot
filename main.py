@@ -1,4 +1,4 @@
-import ccxt, pandas as pd, numpy as np, time, requests, json, os
+import ccxt, pandas as pd, numpy as np, time, requests, json, os, threading
 from datetime import datetime
 
 LTF="15m"; HTF="1h"; MTF="4h"
@@ -192,7 +192,6 @@ class Trader:
         tp1=self.pos["tp1"]
         tp2=self.pos["tp2"]
         qty=self.pos["qty"]
-
         if not self.pos["qty_closed"]:
             hit_tp1=(s=="buy" and price>=tp1) or (s=="sell" and price<=tp1)
             if hit_tp1:
@@ -210,10 +209,8 @@ class Trader:
                 print(f"\n{msg}")
                 send_telegram(f"🤖 SMC BOT\n{msg}")
                 return
-
         hit_tp2=(s=="buy" and price>=tp2) or (s=="sell" and price<=tp2)
         hit_sl=(s=="buy" and price<=sl) or (s=="sell" and price>=sl)
-
         if hit_tp2 or hit_sl:
             ep=tp2 if hit_tp2 else sl
             pnl=(ep-entry)*self.pos["qty"] if s=="buy" else (entry-ep)*self.pos["qty"]
@@ -249,6 +246,20 @@ class Trader:
         print(f"🛡 Дн.потери: {self.daily_loss:.2f} / {self.bal*(DAILY_STOP_LOSS/100):.2f} USDT")
         print(f"{'─'*45}")
 
+# ── Запуск дашборда в отдельном потоке ────────────
+def run_dashboard():
+    try:
+        from dashboard import app
+        port=int(os.environ.get('PORT', 8080))
+        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    except Exception as e:
+        print(f"Ошибка дашборда: {e}")
+
+dashboard_thread=threading.Thread(target=run_dashboard, daemon=True)
+dashboard_thread.start()
+print("✅ Дашборд запущен!")
+
+# ── Запуск бота ────────────────────────────────────
 ex=connect()
 trader=Trader()
 scan=0
