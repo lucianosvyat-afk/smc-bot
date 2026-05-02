@@ -1,5 +1,5 @@
 from flask import Flask, render_template_string, jsonify
-import json, os, requests
+import json, os
 from datetime import datetime
 
 app = Flask(__name__)
@@ -15,148 +15,195 @@ HTML = """
         body { background:#0d1117; color:#e6edf3; font-family:'Segoe UI',sans-serif; }
         .header { background:#161b22; padding:20px 30px; border-bottom:1px solid #30363d; display:flex; justify-content:space-between; align-items:center; }
         .header h1 { color:#58a6ff; font-size:24px; }
-        .status { display:flex; align-items:center; gap:8px; }
-        .dot { width:10px; height:10px; border-radius:50%; background:#3fb950; animation:pulse 2s infinite; }
+        .dot { width:10px; height:10px; border-radius:50%; background:#3fb950; animation:pulse 2s infinite; display:inline-block; margin-right:6px; }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
-        .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:15px; padding:20px 30px; }
-        .card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:20px; }
-        .card-title { color:#8b949e; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
-        .card-value { font-size:28px; font-weight:700; }
-        .green { color:#3fb950; }
-        .red { color:#f85149; }
-        .yellow { color:#d29922; }
-        .blue { color:#58a6ff; }
-        .charts { display:grid; grid-template-columns:2fr 1fr; gap:15px; padding:0 30px 20px; }
+        .bots-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; padding:20px 30px; }
+        .bot-panel { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:20px; }
+        .bot1-panel { border-top:3px solid #58a6ff; }
+        .bot2-panel { border-top:3px solid #3fb950; }
+        .bot-title { font-size:16px; font-weight:700; margin-bottom:15px; }
+        .bot1-title { color:#58a6ff; }
+        .bot2-title { color:#3fb950; }
+        .stats-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:15px; }
+        .stat { background:#0d1117; border-radius:8px; padding:12px; text-align:center; }
+        .stat-label { color:#8b949e; font-size:11px; text-transform:uppercase; margin-bottom:4px; }
+        .stat-value { font-size:20px; font-weight:700; }
+        .charts-section { padding:0 30px 20px; }
+        .charts-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
         .chart-card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:20px; }
-        .chart-card h3 { color:#8b949e; font-size:14px; margin-bottom:15px; }
+        .chart-title { color:#8b949e; font-size:13px; margin-bottom:15px; font-weight:600; }
+        .compare-section { padding:0 30px 20px; }
+        .compare-card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:20px; }
         .trades-section { padding:0 30px 30px; }
+        .trades-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
         .trades-card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:20px; }
-        .trades-card h3 { color:#8b949e; font-size:14px; margin-bottom:15px; }
-        table { width:100%; border-collapse:collapse; }
-        th { color:#8b949e; font-size:12px; text-align:left; padding:8px 12px; border-bottom:1px solid #30363d; }
-        td { padding:10px 12px; border-bottom:1px solid #21262d; font-size:14px; }
+        .trades-title { font-size:13px; font-weight:600; margin-bottom:15px; }
+        table { width:100%; border-collapse:collapse; font-size:12px; }
+        th { color:#8b949e; text-align:left; padding:6px 10px; border-bottom:1px solid #30363d; }
+        td { padding:8px 10px; border-bottom:1px solid #21262d; }
         tr:hover { background:#1c2128; }
-        .badge { padding:3px 8px; border-radius:20px; font-size:11px; font-weight:600; }
+        .badge { padding:2px 7px; border-radius:20px; font-size:10px; font-weight:600; }
         .badge-win { background:#1a3a1e; color:#3fb950; }
         .badge-loss { background:#3a1a1a; color:#f85149; }
         .badge-buy { background:#1a2a3a; color:#58a6ff; }
         .badge-sell { background:#3a2a1a; color:#d29922; }
-        .pos-card { background:#1c2128; border:1px solid #58a6ff44; border-radius:10px; padding:15px; margin-top:10px; }
-        .pos-row { display:flex; justify-content:space-between; margin-top:6px; font-size:13px; }
-        .pnl-positive { color:#3fb950; font-size:20px; font-weight:700; }
-        .pnl-negative { color:#f85149; font-size:20px; font-weight:700; }
+        .pos-block { background:#0d1117; border-radius:8px; padding:12px; margin-top:10px; font-size:12px; }
+        .green { color:#3fb950; }
+        .red { color:#f85149; }
+        .blue { color:#58a6ff; }
+        .yellow { color:#d29922; }
+        .winner-badge { background:#1a3a1e; color:#3fb950; padding:4px 12px; border-radius:20px; font-size:12px; font-weight:700; }
+        .loser-badge { background:#3a1a1a; color:#f85149; padding:4px 12px; border-radius:20px; font-size:12px; }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>🤖 SMC Trading Bot</h1>
-        <div class="status">
-            <div class="dot"></div>
+        <h1>🤖 SMC Trading Bots — Сравнение</h1>
+        <div>
+            <span class="dot"></span>
             <span style="color:#3fb950">Live</span>
             <span style="color:#8b949e; margin-left:15px" id="lastUpdate"></span>
         </div>
     </div>
 
-    <div class="grid">
-        <div class="card">
-            <div class="card-title">💰 Баланс</div>
-            <div class="card-value blue" id="balance">1000.00 USDT</div>
-            <div style="font-size:13px; margin-top:6px" id="profit"></div>
-        </div>
-        <div class="card">
-            <div class="card-title">🏆 WinRate</div>
-            <div class="card-value" id="winrate">0%</div>
-            <div style="color:#8b949e; font-size:13px; margin-top:6px" id="wl">0W / 0L</div>
-        </div>
-        <div class="card">
-            <div class="card-title">📈 Сделок сегодня</div>
-            <div class="card-value yellow" id="daily">0/3</div>
-            <div style="color:#8b949e; font-size:13px; margin-top:6px" id="total">Всего: 0</div>
-        </div>
-        <div class="card">
-            <div class="card-title">🛡 Дневные потери</div>
-            <div class="card-value red" id="dailyLoss">0.00 USDT</div>
-            <div style="color:#8b949e; font-size:13px; margin-top:6px" id="dailyLossLimit"></div>
-        </div>
-    </div>
-
-    <!-- Открытая позиция -->
-    <div style="padding:0 30px 20px" id="positionSection" style="display:none">
-        <div class="pos-card">
-            <div style="color:#58a6ff; font-size:14px; font-weight:600; margin-bottom:10px">📊 Открытая позиция</div>
-            <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:15px">
-                <div>
-                    <div style="color:#8b949e; font-size:11px">ПАРА</div>
-                    <div style="font-size:16px; font-weight:700; margin-top:4px" id="posSymbol">-</div>
+    <!-- Панели ботов -->
+    <div class="bots-grid">
+        <!-- Бот 1 -->
+        <div class="bot-panel bot1-panel">
+            <div class="bot-title bot1-title">🔵 Бот 1 — BOS + OTE + SFP</div>
+            <div class="stats-grid">
+                <div class="stat">
+                    <div class="stat-label">Баланс</div>
+                    <div class="stat-value blue" id="b1-balance">1000</div>
                 </div>
-                <div>
-                    <div style="color:#8b949e; font-size:11px">СТОРОНА</div>
-                    <div style="font-size:16px; font-weight:700; margin-top:4px" id="posSide">-</div>
+                <div class="stat">
+                    <div class="stat-label">WinRate</div>
+                    <div class="stat-value" id="b1-wr">0%</div>
                 </div>
-                <div>
-                    <div style="color:#8b949e; font-size:11px">ВХОД</div>
-                    <div style="font-size:16px; font-weight:700; margin-top:4px" id="posEntry">-</div>
-                </div>
-                <div>
-                    <div style="color:#8b949e; font-size:11px">PnL</div>
-                    <div style="font-size:16px; font-weight:700; margin-top:4px" id="posPnl">-</div>
+                <div class="stat">
+                    <div class="stat-label">Прибыль</div>
+                    <div class="stat-value" id="b1-profit">0</div>
                 </div>
             </div>
-            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:15px; margin-top:12px">
-                <div>
-                    <div style="color:#8b949e; font-size:11px">СТОП ЛОСС</div>
-                    <div style="color:#f85149; font-size:14px; font-weight:600; margin-top:4px" id="posSL">-</div>
+            <div class="stats-grid">
+                <div class="stat">
+                    <div class="stat-label">Сделок</div>
+                    <div class="stat-value" id="b1-total">0</div>
                 </div>
-                <div>
-                    <div style="color:#8b949e; font-size:11px">TP1 (50%)</div>
-                    <div style="color:#d29922; font-size:14px; font-weight:600; margin-top:4px" id="posTP1">-</div>
+                <div class="stat">
+                    <div class="stat-label">Wins</div>
+                    <div class="stat-value green" id="b1-wins">0</div>
                 </div>
-                <div>
-                    <div style="color:#8b949e; font-size:11px">TP2 (50%)</div>
-                    <div style="color:#3fb950; font-size:14px; font-weight:600; margin-top:4px" id="posTP2">-</div>
+                <div class="stat">
+                    <div class="stat-label">Losses</div>
+                    <div class="stat-value red" id="b1-losses">0</div>
+                </div>
+            </div>
+            <div class="pos-block" id="b1-pos">📊 Позиция: Нет</div>
+        </div>
+
+        <!-- Бот 2 -->
+        <div class="bot-panel bot2-panel">
+            <div class="bot-title bot2-title">🟢 Бот 2 — Аккумуляция→Манипуляция→FVG</div>
+            <div class="stats-grid">
+                <div class="stat">
+                    <div class="stat-label">Баланс</div>
+                    <div class="stat-value green" id="b2-balance">1000</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">WinRate</div>
+                    <div class="stat-value" id="b2-wr">0%</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">Прибыль</div>
+                    <div class="stat-value" id="b2-profit">0</div>
+                </div>
+            </div>
+            <div class="stats-grid">
+                <div class="stat">
+                    <div class="stat-label">Сделок</div>
+                    <div class="stat-value" id="b2-total">0</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">Wins</div>
+                    <div class="stat-value green" id="b2-wins">0</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">Losses</div>
+                    <div class="stat-value red" id="b2-losses">0</div>
+                </div>
+            </div>
+            <div class="pos-block" id="b2-pos">📊 Позиция: Нет</div>
+        </div>
+    </div>
+
+    <!-- Сравнение победителя -->
+    <div class="compare-section">
+        <div class="compare-card">
+            <div style="display:flex; justify-content:space-between; align-items:center">
+                <div class="chart-title">🏆 Текущий победитель</div>
+                <div id="winner-badge"></div>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:15px; margin-top:15px">
+                <div style="text-align:center">
+                    <div style="color:#8b949e; font-size:12px">Разница в балансе</div>
+                    <div style="font-size:22px; font-weight:700; margin-top:5px" id="bal-diff">0 USDT</div>
+                </div>
+                <div style="text-align:center">
+                    <div style="color:#8b949e; font-size:12px">Разница WinRate</div>
+                    <div style="font-size:22px; font-weight:700; margin-top:5px" id="wr-diff">0%</div>
+                </div>
+                <div style="text-align:center">
+                    <div style="color:#8b949e; font-size:12px">Лучший сигнал</div>
+                    <div style="font-size:16px; font-weight:700; margin-top:5px" id="best-signal">-</div>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="charts">
-        <div class="chart-card">
-            <h3>📈 Equity Curve</h3>
-            <canvas id="equityChart" height="100"></canvas>
-        </div>
-        <div class="chart-card">
-            <h3>🥧 Win / Loss</h3>
-            <canvas id="pieChart" height="100"></canvas>
+    <!-- Графики -->
+    <div class="charts-section">
+        <div class="charts-grid">
+            <div class="chart-card">
+                <div class="chart-title">📈 Equity Curve — оба бота</div>
+                <canvas id="equityChart" height="120"></canvas>
+            </div>
+            <div class="chart-card">
+                <div class="chart-title">🥧 Win/Loss сравнение</div>
+                <canvas id="barChart" height="120"></canvas>
+            </div>
         </div>
     </div>
 
+    <!-- Журналы сделок -->
     <div class="trades-section">
-        <div class="trades-card">
-            <h3>📋 Журнал сделок</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Время</th>
-                        <th>Пара</th>
-                        <th>Сторона</th>
-                        <th>Вход</th>
-                        <th>Выход</th>
-                        <th>PnL</th>
-                        <th>Результат</th>
-                    </tr>
-                </thead>
-                <tbody id="tradesTable"></tbody>
-            </table>
-            <div id="noTrades" style="text-align:center; color:#8b949e; padding:30px; display:none">
-                Сделок пока нет — бот ищет сигналы...
+        <div class="trades-grid">
+            <div class="trades-card">
+                <div class="trades-title bot1-title">📋 Бот 1 — Журнал сделок</div>
+                <table>
+                    <thead>
+                        <tr><th>Время</th><th>Пара</th><th>Сторона</th><th>PnL</th><th>Итог</th></tr>
+                    </thead>
+                    <tbody id="b1-trades"></tbody>
+                </table>
+                <div id="b1-no-trades" style="text-align:center;color:#8b949e;padding:20px">Сделок пока нет...</div>
+            </div>
+            <div class="trades-card">
+                <div class="trades-title bot2-title">📋 Бот 2 — Журнал сделок</div>
+                <table>
+                    <thead>
+                        <tr><th>Время</th><th>Пара</th><th>Сторона</th><th>PnL</th><th>Итог</th></tr>
+                    </thead>
+                    <tbody id="b2-trades"></tbody>
+                </table>
+                <div id="b2-no-trades" style="text-align:center;color:#8b949e;padding:20px">Сделок пока нет...</div>
             </div>
         </div>
     </div>
 
     <script>
-        const START_BALANCE = 1000;
-        let equityChart, pieChart;
-        let lastPrice = {};
+        const START = 1000;
+        let equityChart, barChart;
 
         function initCharts() {
             const ctx1 = document.getElementById('equityChart').getContext('2d');
@@ -164,159 +211,173 @@ HTML = """
                 type: 'line',
                 data: {
                     labels: ['Старт'],
-                    datasets: [{
-                        label: 'Баланс USDT',
-                        data: [START_BALANCE],
-                        borderColor: '#58a6ff',
-                        backgroundColor: 'rgba(88,166,255,0.1)',
-                        fill: true,
-                        tension: 0.4,
-                        pointRadius: 5,
-                        pointBackgroundColor: '#58a6ff',
-                    }]
+                    datasets: [
+                        {
+                            label: 'Бот 1 (BOS+OTE+SFP)',
+                            data: [START],
+                            borderColor: '#58a6ff',
+                            backgroundColor: 'rgba(88,166,255,0.05)',
+                            fill: true, tension: 0.4, pointRadius: 4,
+                        },
+                        {
+                            label: 'Бот 2 (Accum→FVG)',
+                            data: [START],
+                            borderColor: '#3fb950',
+                            backgroundColor: 'rgba(63,185,80,0.05)',
+                            fill: true, tension: 0.4, pointRadius: 4,
+                        }
+                    ]
                 },
                 options: {
                     responsive: true,
-                    plugins: { legend: { display: false } },
+                    plugins: { legend: { labels: { color: '#8b949e' } } },
                     scales: {
                         x: { grid: { color: '#21262d' }, ticks: { color: '#8b949e' } },
-                        y: { grid: { color: '#21262d' }, ticks: { color: '#8b949e',
-                            callback: v => v.toFixed(0) + '$' } }
+                        y: { grid: { color: '#21262d' }, ticks: { color: '#8b949e', callback: v => v + '$' } }
                     }
                 }
             });
 
-            const ctx2 = document.getElementById('pieChart').getContext('2d');
-            pieChart = new Chart(ctx2, {
-                type: 'doughnut',
+            const ctx2 = document.getElementById('barChart').getContext('2d');
+            barChart = new Chart(ctx2, {
+                type: 'bar',
                 data: {
-                    labels: ['Wins', 'Losses'],
-                    datasets: [{
-                        data: [0, 0],
-                        backgroundColor: ['#3fb950', '#f85149'],
-                        borderWidth: 0,
-                    }]
+                    labels: ['Бот 1', 'Бот 2'],
+                    datasets: [
+                        { label: 'Wins', data: [0, 0], backgroundColor: '#3fb950' },
+                        { label: 'Losses', data: [0, 0], backgroundColor: '#f85149' }
+                    ]
                 },
                 options: {
                     responsive: true,
-                    cutout: '65%',
-                    plugins: {
-                        legend: { labels: { color: '#8b949e' } }
+                    plugins: { legend: { labels: { color: '#8b949e' } } },
+                    scales: {
+                        x: { grid: { color: '#21262d' }, ticks: { color: '#8b949e' } },
+                        y: { grid: { color: '#21262d' }, ticks: { color: '#8b949e' } }
                     }
                 }
             });
         }
 
+        function renderTrades(trades, tbodyId, noTradesId) {
+            const tbody = document.getElementById(tbodyId);
+            const noTrades = document.getElementById(noTradesId);
+            tbody.innerHTML = '';
+            if (!trades || trades.length === 0) {
+                noTrades.style.display = 'block';
+                return;
+            }
+            noTrades.style.display = 'none';
+            [...trades].reverse().forEach(t => {
+                const pnl = parseFloat(t.pnl);
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td style="color:#8b949e">${(t.time||'-').slice(11)}</td>
+                    <td style="font-size:11px">${(t.symbol||'-').replace('/USDT:USDT','')}</td>
+                    <td><span class="badge badge-${t.side}">${(t.side||'').toUpperCase()}</span></td>
+                    <td style="color:${pnl>=0?'#3fb950':'#f85149'};font-weight:600">${pnl>=0?'+':''}${pnl.toFixed(2)}</td>
+                    <td><span class="badge badge-${t.result}">${t.result==='win'?'✅':'❌'}</span></td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
         async function update() {
             try {
-                const r = await fetch('/api/data');
+                const r = await fetch('/api/compare');
                 const d = await r.json();
+                const b1 = d.bot1, b2 = d.bot2;
 
-                // Баланс
-                const profit = d.balance - START_BALANCE;
-                document.getElementById('balance').textContent = parseFloat(d.balance).toFixed(2) + ' USDT';
-                const profitEl = document.getElementById('profit');
-                profitEl.textContent = (profit >= 0 ? '+' : '') + profit.toFixed(2) + ' USDT';
-                profitEl.style.color = profit >= 0 ? '#3fb950' : '#f85149';
+                // Бот 1
+                const p1 = b1.balance - START;
+                const t1 = b1.wins + b1.losses;
+                const wr1 = t1 > 0 ? (b1.wins/t1*100).toFixed(1) : 0;
+                document.getElementById('b1-balance').textContent = parseFloat(b1.balance).toFixed(2);
+                document.getElementById('b1-wr').textContent = wr1 + '%';
+                document.getElementById('b1-wr').style.color = wr1 >= 50 ? '#3fb950' : '#f85149';
+                document.getElementById('b1-profit').textContent = (p1>=0?'+':'') + p1.toFixed(2) + ' USDT';
+                document.getElementById('b1-profit').style.color = p1>=0?'#3fb950':'#f85149';
+                document.getElementById('b1-total').textContent = t1;
+                document.getElementById('b1-wins').textContent = b1.wins;
+                document.getElementById('b1-losses').textContent = b1.losses;
 
-                // WinRate
-                const total = d.wins + d.losses;
-                const wr = total > 0 ? (d.wins / total * 100).toFixed(1) : 0;
-                const wrEl = document.getElementById('winrate');
-                wrEl.textContent = wr + '%';
-                wrEl.style.color = wr >= 50 ? '#3fb950' : '#f85149';
-                document.getElementById('wl').textContent = d.wins + 'W / ' + d.losses + 'L';
-
-                // Сделки
-                document.getElementById('daily').textContent = d.daily_trades + '/' + d.max_daily;
-                document.getElementById('total').textContent = 'Всего: ' + total;
-
-                // Дневные потери
-                const dailyLoss = parseFloat(d.daily_loss || 0);
-                const dailyLimit = parseFloat(d.balance) * 0.03;
-                document.getElementById('dailyLoss').textContent = dailyLoss.toFixed(2) + ' USDT';
-                document.getElementById('dailyLossLimit').textContent = 'Лимит: ' + dailyLimit.toFixed(2) + ' USDT';
-                document.getElementById('dailyLoss').style.color = dailyLoss > dailyLimit * 0.7 ? '#f85149' : '#d29922';
-
-                // Позиция
-                const posSection = document.getElementById('positionSection');
-                if (d.position) {
-                    posSection.style.display = 'block';
-                    const pos = d.position;
-                    document.getElementById('posSymbol').textContent = pos.symbol || '-';
-                    const sideEl = document.getElementById('posSide');
-                    sideEl.textContent = pos.side ? pos.side.toUpperCase() : '-';
-                    sideEl.style.color = pos.side === 'buy' ? '#58a6ff' : '#d29922';
-                    document.getElementById('posEntry').textContent = parseFloat(pos.entry).toFixed(4);
-                    document.getElementById('posSL').textContent = parseFloat(pos.sl).toFixed(4);
-                    document.getElementById('posTP1').textContent = pos.tp1 ? parseFloat(pos.tp1).toFixed(4) : '-';
-                    document.getElementById('posTP2').textContent = pos.tp2 ? parseFloat(pos.tp2).toFixed(4) : '-';
-
-                    // PnL расчёт
-                    if (d.current_price && pos.entry && pos.qty) {
-                        const cp = parseFloat(d.current_price);
-                        const entry = parseFloat(pos.entry);
-                        const qty = parseFloat(pos.qty);
-                        const pnl = pos.side === 'buy' ? (cp - entry) * qty : (entry - cp) * qty;
-                        const pnlEl = document.getElementById('posPnl');
-                        pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + ' USDT';
-                        pnlEl.style.color = pnl >= 0 ? '#3fb950' : '#f85149';
-                    }
+                if (b1.position) {
+                    document.getElementById('b1-pos').innerHTML =
+                        `📊 <b style="color:${b1.position.side==='buy'?'#58a6ff':'#d29922'}">${b1.position.side.toUpperCase()}</b>
+                         ${b1.position.symbol} @ ${parseFloat(b1.position.entry).toFixed(4)}
+                         | SL: <span style="color:#f85149">${parseFloat(b1.position.sl).toFixed(4)}</span>
+                         | TP2: <span style="color:#3fb950">${parseFloat(b1.position.tp2||0).toFixed(4)}</span>`;
                 } else {
-                    posSection.style.display = 'none';
+                    document.getElementById('b1-pos').textContent = '📊 Позиция: Нет';
                 }
 
-                // Equity chart
-                if (d.trades && d.trades.length > 0) {
-                    let bal = START_BALANCE;
-                    const labels = ['Старт'];
-                    const values = [bal];
-                    d.trades.forEach((t, i) => {
-                        bal += t.pnl;
-                        labels.push('#' + (i+1));
-                        values.push(parseFloat(bal.toFixed(2)));
-                    });
-                    equityChart.data.labels = labels;
-                    equityChart.data.datasets[0].data = values;
-                    equityChart.data.datasets[0].borderColor = bal >= START_BALANCE ? '#3fb950' : '#f85149';
-                    equityChart.data.datasets[0].backgroundColor = bal >= START_BALANCE ? 'rgba(63,185,80,0.1)' : 'rgba(248,81,73,0.1)';
-                    equityChart.update();
-                }
+                // Бот 2
+                const p2 = b2.balance - START;
+                const t2 = b2.wins + b2.losses;
+                const wr2 = t2 > 0 ? (b2.wins/t2*100).toFixed(1) : 0;
+                document.getElementById('b2-balance').textContent = parseFloat(b2.balance).toFixed(2);
+                document.getElementById('b2-wr').textContent = wr2 + '%';
+                document.getElementById('b2-wr').style.color = wr2 >= 50 ? '#3fb950' : '#f85149';
+                document.getElementById('b2-profit').textContent = (p2>=0?'+':'') + p2.toFixed(2) + ' USDT';
+                document.getElementById('b2-profit').style.color = p2>=0?'#3fb950':'#f85149';
+                document.getElementById('b2-total').textContent = t2;
+                document.getElementById('b2-wins').textContent = b2.wins;
+                document.getElementById('b2-losses').textContent = b2.losses;
 
-                // Pie chart
-                pieChart.data.datasets[0].data = [d.wins || 0, d.losses || 0];
-                pieChart.update();
-
-                // Таблица
-                const tbody = document.getElementById('tradesTable');
-                const noTrades = document.getElementById('noTrades');
-                tbody.innerHTML = '';
-                if (!d.trades || d.trades.length === 0) {
-                    noTrades.style.display = 'block';
+                if (b2.position) {
+                    document.getElementById('b2-pos').innerHTML =
+                        `📊 <b style="color:${b2.position.side==='buy'?'#58a6ff':'#d29922'}">${b2.position.side.toUpperCase()}</b>
+                         ${b2.position.symbol} @ ${parseFloat(b2.position.entry).toFixed(4)}
+                         | SL: <span style="color:#f85149">${parseFloat(b2.position.sl).toFixed(4)}</span>
+                         | TP2: <span style="color:#3fb950">${parseFloat(b2.position.tp2||0).toFixed(4)}</span>`;
                 } else {
-                    noTrades.style.display = 'none';
-                    const trades = [...d.trades].reverse();
-                    trades.forEach(t => {
-                        const pnl = parseFloat(t.pnl);
-                        const row = document.createElement('tr');
-                        row.innerHTML = `
-                            <td style="color:#8b949e">${t.time || '-'}</td>
-                            <td style="font-weight:600">${t.symbol || '-'}</td>
-                            <td><span class="badge badge-${t.side}">${t.side ? t.side.toUpperCase() : '-'}</span></td>
-                            <td>${parseFloat(t.entry).toFixed(4)}</td>
-                            <td>${parseFloat(t.exit).toFixed(4)}</td>
-                            <td style="color:${pnl >= 0 ? '#3fb950' : '#f85149'}; font-weight:600">
-                                ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USDT
-                            </td>
-                            <td><span class="badge badge-${t.result}">${t.result === 'win' ? '✅ Win' : '❌ Loss'}</span></td>
-                        `;
-                        tbody.appendChild(row);
-                    });
+                    document.getElementById('b2-pos').textContent = '📊 Позиция: Нет';
                 }
 
-                document.getElementById('lastUpdate').textContent = 'Обновлено: ' + new Date().toLocaleTimeString();
+                // Победитель
+                const balDiff = Math.abs(b1.balance - b2.balance).toFixed(2);
+                const wrDiff = Math.abs(wr1 - wr2).toFixed(1);
+                const winner = b1.balance >= b2.balance ? 'Бот 1 🔵' : 'Бот 2 🟢';
+                const winnerColor = b1.balance >= b2.balance ? '#58a6ff' : '#3fb950';
+                document.getElementById('winner-badge').innerHTML =
+                    `<span style="background:${winnerColor}22; color:${winnerColor}; padding:6px 16px; border-radius:20px; font-weight:700">
+                    🏆 ${winner} лидирует</span>`;
+                document.getElementById('bal-diff').textContent = balDiff + ' USDT';
+                document.getElementById('bal-diff').style.color = winnerColor;
+                document.getElementById('wr-diff').textContent = wrDiff + '%';
+                document.getElementById('best-signal').textContent = b1.balance >= b2.balance ? 'BOS+OTE+SFP' : 'Accum→FVG';
+
+                // Equity Chart
+                const labels1 = ['Старт']; const vals1 = [START];
+                let bal1 = START;
+                (b1.trades||[]).forEach((t,i) => { bal1+=t.pnl; labels1.push('#'+(i+1)); vals1.push(parseFloat(bal1.toFixed(2))); });
+
+                const labels2 = ['Старт']; const vals2 = [START];
+                let bal2 = START;
+                (b2.trades||[]).forEach((t,i) => { bal2+=t.pnl; labels2.push('#'+(i+1)); vals2.push(parseFloat(bal2.toFixed(2))); });
+
+                const maxLen = Math.max(labels1.length, labels2.length);
+                const finalLabels = Array.from({length: maxLen}, (_,i) => i===0?'Старт':'#'+i);
+
+                equityChart.data.labels = finalLabels;
+                equityChart.data.datasets[0].data = vals1;
+                equityChart.data.datasets[1].data = vals2;
+                equityChart.update();
+
+                // Bar Chart
+                barChart.data.datasets[0].data = [b1.wins, b2.wins];
+                barChart.data.datasets[1].data = [b1.losses, b2.losses];
+                barChart.update();
+
+                // Таблицы
+                renderTrades(b1.trades, 'b1-trades', 'b1-no-trades');
+                renderTrades(b2.trades, 'b2-trades', 'b2-no-trades');
+
+                document.getElementById('lastUpdate').textContent =
+                    'Обновлено: ' + new Date().toLocaleTimeString();
+
             } catch(e) {
-                console.error('Ошибка обновления:', e);
+                console.error(e);
             }
         }
 
@@ -332,47 +393,40 @@ HTML = """
 def index():
     return render_template_string(HTML)
 
+@app.route('/api/compare')
+def api_compare():
+    def load(filename):
+        default = {"balance":1000,"wins":0,"losses":0,"trades":[],"daily_trades":0,"daily_loss":0,"position":None}
+        try:
+            if os.path.exists(filename):
+                with open(filename) as f:
+                    return json.load(f)
+        except: pass
+        return default
+
+    bot1 = load("paper_trades.json")
+    bot2 = load("paper_trades_bot2.json")
+    bot1.setdefault("position", None)
+    bot2.setdefault("position", None)
+    bot1.setdefault("trades", [])
+    bot2.setdefault("trades", [])
+
+    return jsonify({"bot1": bot1, "bot2": bot2})
+
 @app.route('/api/data')
 def api_data():
-    try:
-        if os.path.exists('paper_trades.json'):
-            with open('paper_trades.json') as f:
-                data = json.load(f)
-        else:
-            data = {
-                "balance": 1000,
-                "wins": 0,
-                "losses": 0,
-                "trades": [],
-                "daily_trades": 0,
-                "daily_loss": 0,
-                "position": None
-            }
-
-        data["max_daily"] = 3
-        data.setdefault("daily_trades", 0)
-        data.setdefault("daily_loss", 0)
-        data.setdefault("position", None)
-        data.setdefault("trades", [])
-
-        # Текущая цена для PnL
-        if data.get("position"):
-            try:
-                import ccxt
-                ex = ccxt.okx({"options": {"defaultType": "swap"}})
-                symbol = data["position"].get("symbol", "BTC/USDT:USDT")
-                ticker = ex.fetch_ticker(symbol)
-                data["current_price"] = ticker["last"]
-            except:
-                data["current_price"] = None
-
-        return jsonify(data)
-    except Exception as e:
-        return jsonify({"error": str(e), "balance": 1000, "wins": 0, "losses": 0,
-                        "trades": [], "daily_trades": 0, "daily_loss": 0,
-                        "position": None, "max_daily": 3})
+    def load(filename):
+        default = {"balance":1000,"wins":0,"losses":0,"trades":[],"daily_trades":0,"daily_loss":0,"position":None,"max_daily":3}
+        try:
+            if os.path.exists(filename):
+                with open(filename) as f:
+                    d = json.load(f)
+                    d["max_daily"] = 3
+                    return d
+        except: pass
+        return default
+    return jsonify(load("paper_trades.json"))
 
 if __name__ == '__main__':
-    import os
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, debug=False)
