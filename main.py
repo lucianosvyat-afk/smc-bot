@@ -263,6 +263,10 @@ print("✅ Дашборд запущен!")
 threading.Thread(target=run_bot2, args=(ex, symbols), daemon=True).start()
 print("✅ Бот 2 запущен! (Аккумуляция→Манипуляция→FVG)")
 
+from bot3_forex import run_bot3
+threading.Thread(target=run_bot3, args=(ex,), daemon=True).start()
+print("✅ Бот 3 запущен! (Форекс: EUR/GBP/AUD)")
+
 # Бот 1 — основной цикл
 trader=Trader()
 scan=0
