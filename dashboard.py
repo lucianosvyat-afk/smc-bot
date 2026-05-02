@@ -1,5 +1,5 @@
 from flask import Flask, render_template_string, jsonify
-import json, os, threading, time
+import json, os, requests
 from datetime import datetime
 
 app = Flask(__name__)
@@ -41,7 +41,10 @@ HTML = """
         .badge-loss { background:#3a1a1a; color:#f85149; }
         .badge-buy { background:#1a2a3a; color:#58a6ff; }
         .badge-sell { background:#3a2a1a; color:#d29922; }
-        .position-card { background:#1c2128; border:1px solid #58a6ff33; border-radius:8px; padding:15px; margin-top:10px; }
+        .pos-card { background:#1c2128; border:1px solid #58a6ff44; border-radius:10px; padding:15px; margin-top:10px; }
+        .pos-row { display:flex; justify-content:space-between; margin-top:6px; font-size:13px; }
+        .pnl-positive { color:#3fb950; font-size:20px; font-weight:700; }
+        .pnl-negative { color:#f85149; font-size:20px; font-weight:700; }
     </style>
 </head>
 <body>
@@ -50,41 +53,80 @@ HTML = """
         <div class="status">
             <div class="dot"></div>
             <span style="color:#3fb950">Live</span>
-            <span style="color:#8b949e; margin-left:10px" id="lastUpdate"></span>
+            <span style="color:#8b949e; margin-left:15px" id="lastUpdate"></span>
         </div>
     </div>
 
     <div class="grid">
         <div class="card">
             <div class="card-title">💰 Баланс</div>
-            <div class="card-value blue" id="balance">1000.00</div>
-            <div style="color:#8b949e; font-size:12px; margin-top:5px" id="profit"></div>
+            <div class="card-value blue" id="balance">1000.00 USDT</div>
+            <div style="font-size:13px; margin-top:6px" id="profit"></div>
         </div>
         <div class="card">
             <div class="card-title">🏆 WinRate</div>
-            <div class="card-value green" id="winrate">0%</div>
-            <div style="color:#8b949e; font-size:12px; margin-top:5px" id="wl"></div>
+            <div class="card-value" id="winrate">0%</div>
+            <div style="color:#8b949e; font-size:13px; margin-top:6px" id="wl">0W / 0L</div>
         </div>
         <div class="card">
-            <div class="card-title">📈 Всего сделок</div>
-            <div class="card-value yellow" id="total">0</div>
-            <div style="color:#8b949e; font-size:12px; margin-top:5px" id="daily"></div>
+            <div class="card-title">📈 Сделок сегодня</div>
+            <div class="card-value yellow" id="daily">0/3</div>
+            <div style="color:#8b949e; font-size:13px; margin-top:6px" id="total">Всего: 0</div>
         </div>
         <div class="card">
-            <div class="card-title">📊 Открытая позиция</div>
-            <div class="card-value" id="position">Нет</div>
-            <div style="color:#8b949e; font-size:12px; margin-top:5px" id="posDetails"></div>
+            <div class="card-title">🛡 Дневные потери</div>
+            <div class="card-value red" id="dailyLoss">0.00 USDT</div>
+            <div style="color:#8b949e; font-size:13px; margin-top:6px" id="dailyLossLimit"></div>
+        </div>
+    </div>
+
+    <!-- Открытая позиция -->
+    <div style="padding:0 30px 20px" id="positionSection" style="display:none">
+        <div class="pos-card">
+            <div style="color:#58a6ff; font-size:14px; font-weight:600; margin-bottom:10px">📊 Открытая позиция</div>
+            <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:15px">
+                <div>
+                    <div style="color:#8b949e; font-size:11px">ПАРА</div>
+                    <div style="font-size:16px; font-weight:700; margin-top:4px" id="posSymbol">-</div>
+                </div>
+                <div>
+                    <div style="color:#8b949e; font-size:11px">СТОРОНА</div>
+                    <div style="font-size:16px; font-weight:700; margin-top:4px" id="posSide">-</div>
+                </div>
+                <div>
+                    <div style="color:#8b949e; font-size:11px">ВХОД</div>
+                    <div style="font-size:16px; font-weight:700; margin-top:4px" id="posEntry">-</div>
+                </div>
+                <div>
+                    <div style="color:#8b949e; font-size:11px">PnL</div>
+                    <div style="font-size:16px; font-weight:700; margin-top:4px" id="posPnl">-</div>
+                </div>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:15px; margin-top:12px">
+                <div>
+                    <div style="color:#8b949e; font-size:11px">СТОП ЛОСС</div>
+                    <div style="color:#f85149; font-size:14px; font-weight:600; margin-top:4px" id="posSL">-</div>
+                </div>
+                <div>
+                    <div style="color:#8b949e; font-size:11px">TP1 (50%)</div>
+                    <div style="color:#d29922; font-size:14px; font-weight:600; margin-top:4px" id="posTP1">-</div>
+                </div>
+                <div>
+                    <div style="color:#8b949e; font-size:11px">TP2 (50%)</div>
+                    <div style="color:#3fb950; font-size:14px; font-weight:600; margin-top:4px" id="posTP2">-</div>
+                </div>
+            </div>
         </div>
     </div>
 
     <div class="charts">
         <div class="chart-card">
-            <h3>📈 Equity Curve (рост баланса)</h3>
-            <canvas id="equityChart" height="120"></canvas>
+            <h3>📈 Equity Curve</h3>
+            <canvas id="equityChart" height="100"></canvas>
         </div>
         <div class="chart-card">
             <h3>🥧 Win / Loss</h3>
-            <canvas id="pieChart" height="120"></canvas>
+            <canvas id="pieChart" height="100"></canvas>
         </div>
     </div>
 
@@ -105,27 +147,32 @@ HTML = """
                 </thead>
                 <tbody id="tradesTable"></tbody>
             </table>
+            <div id="noTrades" style="text-align:center; color:#8b949e; padding:30px; display:none">
+                Сделок пока нет — бот ищет сигналы...
+            </div>
         </div>
     </div>
 
     <script>
         const START_BALANCE = 1000;
         let equityChart, pieChart;
+        let lastPrice = {};
 
         function initCharts() {
             const ctx1 = document.getElementById('equityChart').getContext('2d');
             equityChart = new Chart(ctx1, {
                 type: 'line',
                 data: {
-                    labels: [],
+                    labels: ['Старт'],
                     datasets: [{
                         label: 'Баланс USDT',
-                        data: [],
+                        data: [START_BALANCE],
                         borderColor: '#58a6ff',
                         backgroundColor: 'rgba(88,166,255,0.1)',
                         fill: true,
                         tension: 0.4,
-                        pointRadius: 4,
+                        pointRadius: 5,
+                        pointBackgroundColor: '#58a6ff',
                     }]
                 },
                 options: {
@@ -133,7 +180,8 @@ HTML = """
                     plugins: { legend: { display: false } },
                     scales: {
                         x: { grid: { color: '#21262d' }, ticks: { color: '#8b949e' } },
-                        y: { grid: { color: '#21262d' }, ticks: { color: '#8b949e' } }
+                        y: { grid: { color: '#21262d' }, ticks: { color: '#8b949e',
+                            callback: v => v.toFixed(0) + '$' } }
                     }
                 }
             });
@@ -151,6 +199,7 @@ HTML = """
                 },
                 options: {
                     responsive: true,
+                    cutout: '65%',
                     plugins: {
                         legend: { labels: { color: '#8b949e' } }
                     }
@@ -165,34 +214,60 @@ HTML = """
 
                 // Баланс
                 const profit = d.balance - START_BALANCE;
-                document.getElementById('balance').textContent = d.balance.toFixed(2) + ' USDT';
-                document.getElementById('profit').textContent = (profit >= 0 ? '+' : '') + profit.toFixed(2) + ' USDT';
-                document.getElementById('profit').style.color = profit >= 0 ? '#3fb950' : '#f85149';
+                document.getElementById('balance').textContent = parseFloat(d.balance).toFixed(2) + ' USDT';
+                const profitEl = document.getElementById('profit');
+                profitEl.textContent = (profit >= 0 ? '+' : '') + profit.toFixed(2) + ' USDT';
+                profitEl.style.color = profit >= 0 ? '#3fb950' : '#f85149';
 
                 // WinRate
                 const total = d.wins + d.losses;
                 const wr = total > 0 ? (d.wins / total * 100).toFixed(1) : 0;
-                document.getElementById('winrate').textContent = wr + '%';
-                document.getElementById('winrate').style.color = wr >= 50 ? '#3fb950' : '#f85149';
+                const wrEl = document.getElementById('winrate');
+                wrEl.textContent = wr + '%';
+                wrEl.style.color = wr >= 50 ? '#3fb950' : '#f85149';
                 document.getElementById('wl').textContent = d.wins + 'W / ' + d.losses + 'L';
 
                 // Сделки
-                document.getElementById('total').textContent = total;
-                document.getElementById('daily').textContent = 'Сегодня: ' + d.daily_trades + '/' + d.max_daily;
+                document.getElementById('daily').textContent = d.daily_trades + '/' + d.max_daily;
+                document.getElementById('total').textContent = 'Всего: ' + total;
+
+                // Дневные потери
+                const dailyLoss = parseFloat(d.daily_loss || 0);
+                const dailyLimit = parseFloat(d.balance) * 0.03;
+                document.getElementById('dailyLoss').textContent = dailyLoss.toFixed(2) + ' USDT';
+                document.getElementById('dailyLossLimit').textContent = 'Лимит: ' + dailyLimit.toFixed(2) + ' USDT';
+                document.getElementById('dailyLoss').style.color = dailyLoss > dailyLimit * 0.7 ? '#f85149' : '#d29922';
 
                 // Позиция
+                const posSection = document.getElementById('positionSection');
                 if (d.position) {
-                    document.getElementById('position').textContent = d.position.side.toUpperCase();
-                    document.getElementById('position').style.color = d.position.side === 'buy' ? '#58a6ff' : '#d29922';
-                    document.getElementById('posDetails').textContent = d.position.symbol + ' @ ' + d.position.entry.toFixed(4);
+                    posSection.style.display = 'block';
+                    const pos = d.position;
+                    document.getElementById('posSymbol').textContent = pos.symbol || '-';
+                    const sideEl = document.getElementById('posSide');
+                    sideEl.textContent = pos.side ? pos.side.toUpperCase() : '-';
+                    sideEl.style.color = pos.side === 'buy' ? '#58a6ff' : '#d29922';
+                    document.getElementById('posEntry').textContent = parseFloat(pos.entry).toFixed(4);
+                    document.getElementById('posSL').textContent = parseFloat(pos.sl).toFixed(4);
+                    document.getElementById('posTP1').textContent = pos.tp1 ? parseFloat(pos.tp1).toFixed(4) : '-';
+                    document.getElementById('posTP2').textContent = pos.tp2 ? parseFloat(pos.tp2).toFixed(4) : '-';
+
+                    // PnL расчёт
+                    if (d.current_price && pos.entry && pos.qty) {
+                        const cp = parseFloat(d.current_price);
+                        const entry = parseFloat(pos.entry);
+                        const qty = parseFloat(pos.qty);
+                        const pnl = pos.side === 'buy' ? (cp - entry) * qty : (entry - cp) * qty;
+                        const pnlEl = document.getElementById('posPnl');
+                        pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + ' USDT';
+                        pnlEl.style.color = pnl >= 0 ? '#3fb950' : '#f85149';
+                    }
                 } else {
-                    document.getElementById('position').textContent = 'Нет';
-                    document.getElementById('position').style.color = '#8b949e';
-                    document.getElementById('posDetails').textContent = '';
+                    posSection.style.display = 'none';
                 }
 
                 // Equity chart
-                if (d.trades.length > 0) {
+                if (d.trades && d.trades.length > 0) {
                     let bal = START_BALANCE;
                     const labels = ['Старт'];
                     const values = [bal];
@@ -203,34 +278,45 @@ HTML = """
                     });
                     equityChart.data.labels = labels;
                     equityChart.data.datasets[0].data = values;
+                    equityChart.data.datasets[0].borderColor = bal >= START_BALANCE ? '#3fb950' : '#f85149';
+                    equityChart.data.datasets[0].backgroundColor = bal >= START_BALANCE ? 'rgba(63,185,80,0.1)' : 'rgba(248,81,73,0.1)';
                     equityChart.update();
                 }
 
                 // Pie chart
-                pieChart.data.datasets[0].data = [d.wins, d.losses];
+                pieChart.data.datasets[0].data = [d.wins || 0, d.losses || 0];
                 pieChart.update();
 
-                // Таблица сделок
+                // Таблица
                 const tbody = document.getElementById('tradesTable');
+                const noTrades = document.getElementById('noTrades');
                 tbody.innerHTML = '';
-                const trades = [...d.trades].reverse();
-                trades.forEach(t => {
-                    const row = document.createElement('tr');
-                    row.innerHTML = `
-                        <td style="color:#8b949e">${t.time || '-'}</td>
-                        <td>${t.symbol || 'BTC/USDT'}</td>
-                        <td><span class="badge badge-${t.side}">${t.side.toUpperCase()}</span></td>
-                        <td>${parseFloat(t.entry).toFixed(4)}</td>
-                        <td>${parseFloat(t.exit).toFixed(4)}</td>
-                        <td style="color:${t.pnl >= 0 ? '#3fb950' : '#f85149'}">${t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}</td>
-                        <td><span class="badge badge-${t.result}">${t.result === 'win' ? '✅ Win' : '❌ Loss'}</span></td>
-                    `;
-                    tbody.appendChild(row);
-                });
+                if (!d.trades || d.trades.length === 0) {
+                    noTrades.style.display = 'block';
+                } else {
+                    noTrades.style.display = 'none';
+                    const trades = [...d.trades].reverse();
+                    trades.forEach(t => {
+                        const pnl = parseFloat(t.pnl);
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td style="color:#8b949e">${t.time || '-'}</td>
+                            <td style="font-weight:600">${t.symbol || '-'}</td>
+                            <td><span class="badge badge-${t.side}">${t.side ? t.side.toUpperCase() : '-'}</span></td>
+                            <td>${parseFloat(t.entry).toFixed(4)}</td>
+                            <td>${parseFloat(t.exit).toFixed(4)}</td>
+                            <td style="color:${pnl >= 0 ? '#3fb950' : '#f85149'}; font-weight:600">
+                                ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USDT
+                            </td>
+                            <td><span class="badge badge-${t.result}">${t.result === 'win' ? '✅ Win' : '❌ Loss'}</span></td>
+                        `;
+                        tbody.appendChild(row);
+                    });
+                }
 
                 document.getElementById('lastUpdate').textContent = 'Обновлено: ' + new Date().toLocaleTimeString();
             } catch(e) {
-                console.error(e);
+                console.error('Ошибка обновления:', e);
             }
         }
 
@@ -253,15 +339,40 @@ def api_data():
             with open('paper_trades.json') as f:
                 data = json.load(f)
         else:
-            data = {"balance": 1000, "wins": 0, "losses": 0, "trades": [], "daily_trades": 0}
+            data = {
+                "balance": 1000,
+                "wins": 0,
+                "losses": 0,
+                "trades": [],
+                "daily_trades": 0,
+                "daily_loss": 0,
+                "position": None
+            }
 
         data["max_daily"] = 3
-        data["daily_trades"] = data.get("daily_trades", 0)
-        data["position"] = data.get("position", None)
+        data.setdefault("daily_trades", 0)
+        data.setdefault("daily_loss", 0)
+        data.setdefault("position", None)
+        data.setdefault("trades", [])
+
+        # Текущая цена для PnL
+        if data.get("position"):
+            try:
+                import ccxt
+                ex = ccxt.okx({"options": {"defaultType": "swap"}})
+                symbol = data["position"].get("symbol", "BTC/USDT:USDT")
+                ticker = ex.fetch_ticker(symbol)
+                data["current_price"] = ticker["last"]
+            except:
+                data["current_price"] = None
+
         return jsonify(data)
     except Exception as e:
-        return jsonify({"error": str(e)})
+        return jsonify({"error": str(e), "balance": 1000, "wins": 0, "losses": 0,
+                        "trades": [], "daily_trades": 0, "daily_loss": 0,
+                        "position": None, "max_daily": 3})
 
 if __name__ == '__main__':
+    import os
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, debug=False)
