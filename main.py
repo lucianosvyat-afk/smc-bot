@@ -1,5 +1,6 @@
 import ccxt, pandas as pd, numpy as np, time, requests, json, os, threading
 from datetime import datetime
+from bot2 import run_bot2
 
 LTF="15m"; HTF="1h"; MTF="4h"
 LEVERAGE=10; RISK_PERCENT=1.0
@@ -17,7 +18,7 @@ def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     try:
         url=f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url,data={"chat_id":TELEGRAM_CHAT_ID,"text":msg},timeout=5)
+        requests.post(url,data={"chat_id":TELEGRAM_CHAT_ID,"text":f"🤖 БОТ 1\n{msg}"},timeout=5)
     except: pass
 
 def connect():
@@ -107,12 +108,12 @@ def signal(ex,symbol,trend,mtf_trend):
             sl=l.iloc[-1]*0.999
             tp1=price+(price-sl)*TP1_RR
             tp2=price+(price-sl)*TP2_RR
-            return {"side":"buy","entry":price,"sl":sl,"tp1":tp1,"tp2":tp2,"symbol":symbol,"qty_closed":False}
+            return {"side":"buy","entry":price,"sl":sl,"tp1":tp1,"tp2":tp2,"symbol":symbol,"qty_closed":False,"strategy":"BOS+OTE+SFP"}
         else:
             sl=h.iloc[-1]*1.001
             tp1=price-(sl-price)*TP1_RR
             tp2=price-(sl-price)*TP2_RR
-            return {"side":"sell","entry":price,"sl":sl,"tp1":tp1,"tp2":tp2,"symbol":symbol,"qty_closed":False}
+            return {"side":"sell","entry":price,"sl":sl,"tp1":tp1,"tp2":tp2,"symbol":symbol,"qty_closed":False,"strategy":"BOS+OTE+SFP"}
     return None
 
 class Trader:
@@ -133,7 +134,7 @@ class Trader:
                 self.trades=d.get("trades",[])
                 self.daily_trades=d.get("daily_trades",0)
                 self.daily_loss=d.get("daily_loss",0.0)
-            print(f"Загружено | Баланс: {self.bal:.2f} USDT")
+            print(f"[БОТ1] Загружено | Баланс: {self.bal:.2f} USDT")
 
     def save(self):
         with open(LOG_FILE,"w") as f:
@@ -153,15 +154,14 @@ class Trader:
             self.daily_trades=0
             self.daily_loss=0.0
             self.last_day=today
-            print("📅 Новый день — сброс дневных лимитов")
 
     def can_trade(self):
         self.reset_daily()
         if self.daily_trades >= MAX_DAILY_TRADES:
-            print(f"⛔ Лимит сделок за день ({MAX_DAILY_TRADES}) достигнут")
+            print(f"[БОТ1] ⛔ Лимит сделок за день")
             return False
         if self.daily_loss >= self.bal*(DAILY_STOP_LOSS/100):
-            print(f"⛔ Дневной стоп-лосс {DAILY_STOP_LOSS}% достигнут")
+            print(f"[БОТ1] ⛔ Дневной стоп-лосс достигнут")
             return False
         return True
 
@@ -170,18 +170,19 @@ class Trader:
         risk=self.bal*(RISK_PERCENT/100)
         sl_d=abs(sig["entry"]-sig["sl"])
         qty=(risk/sl_d)*LEVERAGE if sl_d>0 else 0
-        self.pos={**sig,"qty":qty,"qty_closed":False}
+        self.pos={**sig,"qty":qty}
         self.daily_trades+=1
         self.save()
-        msg=(f"{'📈' if sig['side']=='buy' else '📉'} ПОЗИЦИЯ #{self.daily_trades}: {sig['side'].upper()}\n"
+        msg=(f"{'📈' if sig['side']=='buy' else '📉'} ПОЗИЦИЯ: {sig['side'].upper()}\n"
              f"Пара: {sig['symbol']}\n"
+             f"Стратегия: {sig.get('strategy','')}\n"
              f"Вход: {sig['entry']:.4f}\n"
              f"SL: {sig['sl']:.4f}\n"
              f"TP1: {sig['tp1']:.4f}\n"
              f"TP2: {sig['tp2']:.4f}\n"
              f"Риск: {risk:.2f} USDT")
-        print(f"\n{'='*45}\n{msg}\n{'='*45}")
-        send_telegram(f"🤖 SMC BOT\n{msg}")
+        print(f"\n[БОТ1] {'='*40}\n{msg}\n{'='*40}")
+        send_telegram(msg)
 
     def check(self,price,symbol):
         if not self.pos: return
@@ -201,13 +202,9 @@ class Trader:
                 self.pos["sl"]=entry
                 self.pos["qty"]=qty/2
                 self.save()
-                msg=(f"⚡ ЧАСТИЧНОЕ ЗАКРЫТИЕ 50%\n"
-                     f"{symbol} | TP1: {tp1:.4f}\n"
-                     f"PnL: +{pnl_half:.2f} USDT\n"
-                     f"Стоп → безубыток\n"
-                     f"Баланс: {self.bal:.2f} USDT")
-                print(f"\n{msg}")
-                send_telegram(f"🤖 SMC BOT\n{msg}")
+                msg=f"⚡ ЧАСТИЧНОЕ ЗАКРЫТИЕ 50%\n{symbol} | PnL: +{pnl_half:.2f} USDT\nБаланс: {self.bal:.2f}"
+                print(f"\n[БОТ1] {msg}")
+                send_telegram(msg)
                 return
         hit_tp2=(s=="buy" and price>=tp2) or (s=="sell" and price<=tp2)
         hit_sl=(s=="buy" and price<=sl) or (s=="sell" and price>=sl)
@@ -223,14 +220,15 @@ class Trader:
                 "symbol": symbol, "side": s,
                 "entry": entry, "exit": ep,
                 "pnl": round(pnl,2),
-                "result": "win" if hit_tp2 else "loss"
+                "result": "win" if hit_tp2 else "loss",
+                "strategy": sig.get("strategy","BOS+OTE+SFP") if (sig:=self.pos) else "BOS+OTE+SFP"
             })
             msg=(f"{'✅ ТЕЙК ПРОФИТ' if hit_tp2 else '❌ СТОП ЛОСС'}\n"
                  f"{symbol} | Выход: {ep:.4f}\n"
                  f"PnL: {pnl:+.2f} USDT\n"
                  f"Баланс: {self.bal:.2f} USDT")
-            print(f"\n{msg}")
-            send_telegram(f"🤖 SMC BOT\n{msg}")
+            print(f"\n[БОТ1] {msg}")
+            send_telegram(msg)
             self.pos=None
             self.save()
 
@@ -238,15 +236,13 @@ class Trader:
         total=self.wins+self.losses
         wr=(self.wins/total*100) if total>0 else 0
         profit=self.bal-START_BALANCE
-        print(f"\n{'─'*45}")
-        print(f"💰 Баланс:    {self.bal:.2f} USDT ({profit:+.2f})")
-        print(f"📊 Позиция:   {'Нет' if not self.pos else self.pos['side'].upper()+' '+self.pos['symbol']}")
-        print(f"🏆 Счёт:      {self.wins}W/{self.losses}L | WR: {wr:.1f}%")
-        print(f"📈 Сделок:    {total} (сегодня: {self.daily_trades}/{MAX_DAILY_TRADES})")
-        print(f"🛡 Дн.потери: {self.daily_loss:.2f} / {self.bal*(DAILY_STOP_LOSS/100):.2f} USDT")
-        print(f"{'─'*45}")
+        print(f"\n[БОТ1] {'─'*40}")
+        print(f"[БОТ1] 💰 Баланс: {self.bal:.2f} USDT ({profit:+.2f})")
+        print(f"[БОТ1] 📊 Позиция: {'Нет' if not self.pos else self.pos['side'].upper()}")
+        print(f"[БОТ1] 🏆 {self.wins}W/{self.losses}L | WR: {wr:.1f}%")
+        print(f"[БОТ1] {'─'*40}")
 
-# ── Запуск дашборда в отдельном потоке ────────────
+# ── Запуск дашборда ────────────────────────────────
 def run_dashboard():
     try:
         from dashboard import app
@@ -255,19 +251,25 @@ def run_dashboard():
     except Exception as e:
         print(f"Ошибка дашборда: {e}")
 
-dashboard_thread=threading.Thread(target=run_dashboard, daemon=True)
-dashboard_thread.start()
+# ── Главный запуск ─────────────────────────────────
+ex=connect()
+symbols=get_top_volatile(ex, TOP_PAIRS)
+
+# Запуск дашборда
+threading.Thread(target=run_dashboard, daemon=True).start()
 print("✅ Дашборд запущен!")
 
-# ── Запуск бота ────────────────────────────────────
-ex=connect()
+# Запуск Бота 2 в отдельном потоке
+threading.Thread(target=run_bot2, args=(ex, symbols), daemon=True).start()
+print("✅ Бот 2 запущен! (Аккумуляция→Манипуляция→FVG)")
+
+# Бот 1 — основной цикл
 trader=Trader()
 scan=0
-symbols=[]
 
-msg=f"🤖 SMC BOT запущен!\nБаланс: {START_BALANCE} USDT\nРежим: Paper Trading"
-print(f"\n{msg}")
-send_telegram(msg)
+print(f"\n✅ Бот 1 запущен! (BOS+OTE+SFP)")
+print(f"Оба бота работают параллельно!\n")
+send_telegram(f"🚀 Оба бота запущены!\nБот1: BOS+OTE+SFP\nБот2: Аккумуляция→Манипуляция→FVG\nБаланс каждого: {START_BALANCE} USDT")
 
 while True:
     try:
@@ -275,32 +277,35 @@ while True:
         if scan==1 or scan%UPDATE_PAIRS_EVERY==0:
             print(f"\n🔄 Обновляю список волатильных пар...")
             symbols=get_top_volatile(ex, TOP_PAIRS)
+
         for symbol in symbols:
             try:
                 price=get_price(ex,symbol)
-                print(f"\n[{datetime.now().strftime('%H:%M:%S')}] {symbol}: {price:.4f}")
+                print(f"\n[БОТ1] [{datetime.now().strftime('%H:%M:%S')}] {symbol}: {price:.4f}")
                 trader.check(price,symbol)
                 if trader.pos and trader.pos.get("symbol")==symbol:
-                    print(f"  ⏳ {trader.pos['side'].upper()} @ {trader.pos['entry']:.4f} | SL:{trader.pos['sl']:.4f} | TP2:{trader.pos['tp2']:.4f}")
+                    print(f"[БОТ1] ⏳ {trader.pos['side'].upper()} @ {trader.pos['entry']:.4f} | SL:{trader.pos['sl']:.4f} | TP2:{trader.pos['tp2']:.4f}")
                 else:
                     df_mtf=fetch(ex,symbol,MTF,100)
                     mtf_trend=bos(df_mtf)
                     df_htf=fetch(ex,symbol,HTF,100)
                     htf_trend=bos(df_htf)
-                    print(f"  4H:{mtf_trend or 'нет'} | 1H:{htf_trend or 'нет'}")
+                    print(f"[БОТ1] 4H:{mtf_trend or 'нет'} | 1H:{htf_trend or 'нет'}")
                     if htf_trend and not trader.pos:
                         sig=signal(ex,symbol,htf_trend,mtf_trend)
                         if sig: trader.open(sig)
-                        else: print(f"  Сигнала нет")
+                        else: print(f"[БОТ1] Сигнала нет")
             except Exception as e:
-                print(f"  Ошибка {symbol}: {e}")
+                print(f"[БОТ1] Ошибка {symbol}: {e}")
                 continue
+
         if scan%5==0: trader.status()
         time.sleep(60)
+
     except KeyboardInterrupt:
         print("\nОстановлен.")
         trader.status()
         break
     except Exception as e:
-        print(f"Ошибка: {e}")
+        print(f"[БОТ1] Ошибка: {e}")
         time.sleep(15)
