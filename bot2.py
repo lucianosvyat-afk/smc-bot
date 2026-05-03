@@ -1,15 +1,10 @@
 import ccxt, pandas as pd, numpy as np, time, requests, json, os
 from datetime import datetime
 
-# ══════════════════════════════════════════════════
-#   БОТ 2 — Стратегия: Аккумуляция→Манипуляция→FVG
-# ══════════════════════════════════════════════════
 LTF="15m"; MTF="1h"; HTF="4h"
 LEVERAGE=10; RISK_PERCENT=1.0
 START_BALANCE=1000.0; SWING_LOOKBACK=5
-TOP_PAIRS=5; UPDATE_PAIRS_EVERY=30
-MAX_DAILY_TRADES=3
-DAILY_STOP_LOSS=3.0
+MAX_DAILY_TRADES=3; DAILY_STOP_LOSS=3.0
 TP1_RR=1.0; TP2_RR=2.0
 LOG_FILE2="paper_trades_bot2.json"
 
@@ -39,183 +34,92 @@ def swings(df,n=5):
     df["sl"]=df["low"].where(df["low"]==df["low"].rolling(n*2+1,center=True).min())
     return df
 
-# ── Фаза 1: Определение аккумуляции (боковик на 4h) ──
-def detect_accumulation(df, lookback=20, threshold=0.03):
-    """
-    Боковик = цена колеблется в диапазоне threshold% последние lookback свечей
-    """
+def detect_accumulation(df, lookback=20, threshold=0.04):
     recent=df.tail(lookback)
     high=recent["high"].max()
     low=recent["low"].min()
     range_pct=(high-low)/low
-    is_range=range_pct < threshold
-
     return {
-        "is_accumulation": is_range,
+        "is_accumulation": range_pct < threshold,
         "range_high": high,
         "range_low": low,
         "range_pct": range_pct,
         "mid": (high+low)/2
     }
 
-# ── Фаза 2: Манипуляция (свип под/над зону аккумуляции) ──
-def detect_manipulation(df_htf, df_mtf, accum):
-    """
-    Манипуляция = цена пробила зону аккумуляции но закрылась обратно (SFP)
-    """
-    if not accum["is_accumulation"]:
-        return None
-
-    # Смотрим последние свечи на 1h
+def detect_manipulation(df_mtf, accum):
+    if not accum["is_accumulation"]: return None
     last=df_mtf.iloc[-1]
-    prev=df_mtf.iloc[-2]
-
-    # Бычья манипуляция: свип вниз под range_low и закрытие выше
-    bull_manip=(last["low"] < accum["range_low"] and
-                last["close"] > accum["range_low"])
-
-    # Медвежья манипуляция: свип вверх над range_high и закрытие ниже
-    bear_manip=(last["high"] > accum["range_high"] and
-                last["close"] < accum["range_high"])
-
-    if bull_manip:
-        return {"type": "bullish", "sweep_level": accum["range_low"]}
-    if bear_manip:
-        return {"type": "bearish", "sweep_level": accum["range_high"]}
+    bull=(last["low"]<accum["range_low"] and last["close"]>accum["range_low"])
+    bear=(last["high"]>accum["range_high"] and last["close"]<accum["range_high"])
+    if bull: return {"type":"bullish","sweep":accum["range_low"]}
+    if bear: return {"type":"bearish","sweep":accum["range_high"]}
     return None
 
-# ── Фаза 3: FVG после манипуляции ──
-def find_fvg_after_manipulation(df, manip_type, lookback=10):
-    """
-    Ищем FVG который появился ПОСЛЕ манипуляции
-    Бычий FVG: свеча[i-1].high < свеча[i+1].low
-    Медвежий FVG: свеча[i-1].low > свеча[i+1].high
-    """
+def find_fvg(df, manip_type, lookback=15):
     recent=df.tail(lookback)
     fvgs=[]
-
-    for i in range(1, len(recent)-1):
-        p=recent.iloc[i-1]
-        n=recent.iloc[i+1]
-
-        if manip_type=="bullish" and p["high"] < n["low"]:
-            fvg_top=n["low"]
-            fvg_bot=p["high"]
-            fvg_mid=(fvg_top+fvg_bot)/2
-            fvgs.append({
-                "type": "bullish",
-                "top": fvg_top,
-                "bot": fvg_bot,
-                "mid": fvg_mid
-            })
-
-        if manip_type=="bearish" and p["low"] > n["high"]:
-            fvg_top=p["low"]
-            fvg_bot=n["high"]
-            fvg_mid=(fvg_top+fvg_bot)/2
-            fvgs.append({
-                "type": "bearish",
-                "top": fvg_top,
-                "bot": fvg_bot,
-                "mid": fvg_mid
-            })
-
+    for i in range(1,len(recent)-1):
+        p=recent.iloc[i-1]; n=recent.iloc[i+1]
+        if manip_type=="bullish" and p["high"]<n["low"]:
+            fvgs.append({"type":"bullish","top":n["low"],"bot":p["high"],"mid":(n["low"]+p["high"])/2})
+        if manip_type=="bearish" and p["low"]>n["high"]:
+            fvgs.append({"type":"bearish","top":p["low"],"bot":n["high"],"mid":(p["low"]+n["high"])/2})
     return fvgs[-1] if fvgs else None
 
-# ── Фаза 4: Дистрибуция (цель тейк профита) ──
-def find_distribution_target(df_htf, manip_type, accum):
-    """
-    Цель = противоположная сторона зоны аккумуляции или следующий свинг
-    """
+def find_target(df_htf, manip_type, accum):
     sp=swings(df_htf, SWING_LOOKBACK)
-
     if manip_type=="bullish":
         highs=sp["sh"].dropna()
-        if len(highs) >= 2:
-            return highs.iloc[-1]  # последний хай = зона дистрибуции
-        return accum["range_high"]
-
-    if manip_type=="bearish":
+        return highs.iloc[-1] if len(highs)>=1 else accum["range_high"]
+    else:
         lows=sp["sl"].dropna()
-        if len(lows) >= 2:
-            return lows.iloc[-1]
-        return accum["range_low"]
+        return lows.iloc[-1] if len(lows)>=1 else accum["range_low"]
 
-    return None
-
-# ── Главная функция сигнала ──
 def get_signal2(ex, symbol):
-    """
-    Полная проверка всех 4 фаз:
-    1. Аккумуляция на 4h
-    2. Манипуляция на 1h
-    3. FVG на 15m
-    4. Цена в FVG = вход
-    """
     try:
-        df_htf=fetch(ex, symbol, HTF, 100)  # 4h
-        df_mtf=fetch(ex, symbol, MTF, 100)  # 1h
-        df_ltf=fetch(ex, symbol, LTF, 100)  # 15m
+        df_htf=fetch(ex,symbol,HTF,100)
+        df_mtf=fetch(ex,symbol,MTF,100)
+        df_ltf=fetch(ex,symbol,LTF,100)
         price=df_ltf["close"].iloc[-1]
 
-        # Фаза 1: Аккумуляция
-        accum=detect_accumulation(df_htf, lookback=20, threshold=0.04)
+        accum=detect_accumulation(df_htf)
         if not accum["is_accumulation"]:
             return None, "Нет аккумуляции"
 
-        # Фаза 2: Манипуляция
-        manip=detect_manipulation(df_htf, df_mtf, accum)
+        manip=detect_manipulation(df_mtf, accum)
         if not manip:
             return None, "Нет манипуляции"
 
-        # Фаза 3: FVG
-        fvg=find_fvg_after_manipulation(df_ltf, manip["type"], lookback=15)
+        fvg=find_fvg(df_ltf, manip["type"])
         if not fvg:
             return None, "Нет FVG"
 
-        # Фаза 4: Цена в FVG?
-        price_in_fvg=(fvg["bot"] <= price <= fvg["top"])
-        if not price_in_fvg:
-            return None, f"Цена не в FVG ({fvg['bot']:.4f}-{fvg['top']:.4f})"
+        if not (fvg["bot"]<=price<=fvg["top"]):
+            return None, f"Цена не в FVG"
 
-        # Цель (дистрибуция)
-        target=find_distribution_target(df_htf, manip["type"], accum)
+        target=find_target(df_htf, manip["type"], accum)
 
         if manip["type"]=="bullish":
-            sl=accum["range_low"] * 0.999
+            sl=accum["range_low"]*0.999
             tp1=price+(price-sl)*TP1_RR
-            tp2=target if target and target > price else price+(price-sl)*TP2_RR
+            tp2=target if target and target>price else price+(price-sl)*TP2_RR
             return {
-                "side": "buy",
-                "entry": price,
-                "sl": sl,
-                "tp1": tp1,
-                "tp2": tp2,
-                "symbol": symbol,
-                "qty_closed": False,
-                "strategy": "Accum→Manip→FVG"
+                "side":"buy","entry":price,"sl":sl,
+                "tp1":tp1,"tp2":tp2,"symbol":symbol,
+                "qty_closed":False,"strategy":"Accum→Manip→FVG"
             }, "✅ Сигнал!"
-
-        elif manip["type"]=="bearish":
-            sl=accum["range_high"] * 1.001
+        else:
+            sl=accum["range_high"]*1.001
             tp1=price-(sl-price)*TP1_RR
-            tp2=target if target and target < price else price-(sl-price)*TP2_RR
+            tp2=target if target and target<price else price-(sl-price)*TP2_RR
             return {
-                "side": "sell",
-                "entry": price,
-                "sl": sl,
-                "tp1": tp1,
-                "tp2": tp2,
-                "symbol": symbol,
-                "qty_closed": False,
-                "strategy": "Accum→Manip→FVG"
+                "side":"sell","entry":price,"sl":sl,
+                "tp1":tp1,"tp2":tp2,"symbol":symbol,
+                "qty_closed":False,"strategy":"Accum→Manip→FVG"
             }, "✅ Сигнал!"
-
     except Exception as e:
         return None, f"Ошибка: {e}"
-
-    return None, "Нет сигнала"
-
 
 class Trader2:
     def __init__(self):
@@ -240,28 +144,22 @@ class Trader2:
     def save(self):
         with open(LOG_FILE2,"w") as f:
             json.dump({
-                "balance": self.bal,
-                "wins": self.wins,
-                "losses": self.losses,
-                "trades": self.trades[-50:],
-                "daily_trades": self.daily_trades,
-                "daily_loss": self.daily_loss,
-                "position": self.pos
-            }, f, indent=2)
+                "balance":self.bal,"wins":self.wins,
+                "losses":self.losses,"trades":self.trades[-50:],
+                "daily_trades":self.daily_trades,
+                "daily_loss":self.daily_loss,"position":self.pos
+            },f,indent=2)
 
     def reset_daily(self):
         today=datetime.now().date()
-        if today != self.last_day:
-            self.daily_trades=0
-            self.daily_loss=0.0
+        if today!=self.last_day:
+            self.daily_trades=0; self.daily_loss=0.0
             self.last_day=today
 
     def can_trade(self):
         self.reset_daily()
-        if self.daily_trades >= MAX_DAILY_TRADES:
-            return False
-        if self.daily_loss >= self.bal*(DAILY_STOP_LOSS/100):
-            return False
+        if self.daily_trades>=MAX_DAILY_TRADES: return False
+        if self.daily_loss>=self.bal*(DAILY_STOP_LOSS/100): return False
         return True
 
     def open(self,sig):
@@ -292,7 +190,6 @@ class Trader2:
         tp1=self.pos["tp1"]
         tp2=self.pos["tp2"]
         qty=self.pos["qty"]
-
         if not self.pos["qty_closed"]:
             hit_tp1=(s=="buy" and price>=tp1) or (s=="sell" and price<=tp1)
             if hit_tp1:
@@ -306,10 +203,8 @@ class Trader2:
                 print(f"\n[БОТ2] {msg}")
                 send_telegram(msg)
                 return
-
         hit_tp2=(s=="buy" and price>=tp2) or (s=="sell" and price<=tp2)
         hit_sl=(s=="buy" and price<=sl) or (s=="sell" and price>=sl)
-
         if hit_tp2 or hit_sl:
             ep=tp2 if hit_tp2 else sl
             pnl=(ep-entry)*self.pos["qty"] if s=="buy" else (entry-ep)*self.pos["qty"]
@@ -321,9 +216,11 @@ class Trader2:
                 "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "symbol": symbol, "side": s,
                 "entry": entry, "exit": ep,
+                "sl": self.pos.get("sl",0),
+                "tp1": tp1, "tp2": tp2,
                 "pnl": round(pnl,2),
                 "result": "win" if hit_tp2 else "loss",
-                "strategy": "Accum→Manip→FVG"
+                "strategy": self.pos.get("strategy","Accum→Manip→FVG")
             })
             msg=(f"{'✅ ТЕЙК ПРОФИТ' if hit_tp2 else '❌ СТОП ЛОСС'}\n"
                  f"{symbol} | Выход: {ep:.4f}\n"
@@ -344,38 +241,29 @@ class Trader2:
         print(f"[БОТ2] 🏆 {self.wins}W/{self.losses}L | WR: {wr:.1f}%")
         print(f"[БОТ2] {'─'*40}")
 
-
 def run_bot2(ex, symbols):
-    """Главный цикл бота 2 — запускается в отдельном потоке"""
     trader2=Trader2()
     scan=0
     print("\n[БОТ2] 🚀 Запущен! Стратегия: Аккумуляция→Манипуляция→FVG")
-
     while True:
         try:
             scan+=1
             for symbol in symbols:
                 try:
-                    price=get_price(ex, symbol)
-                    trader2.check(price, symbol)
-
+                    price=get_price(ex,symbol)
+                    trader2.check(price,symbol)
                     if trader2.pos and trader2.pos.get("symbol")==symbol:
                         print(f"[БОТ2] ⏳ {symbol}: {trader2.pos['side'].upper()} @ {trader2.pos['entry']:.4f}")
                     else:
-                        sig, reason=get_signal2(ex, symbol)
+                        sig,reason=get_signal2(ex,symbol)
                         print(f"[БОТ2] {symbol}: {reason}")
                         if sig and not trader2.pos:
                             trader2.open(sig)
-
                 except Exception as e:
                     print(f"[БОТ2] Ошибка {symbol}: {e}")
                     continue
-
-            if scan%5==0:
-                trader2.status()
-
+            if scan%5==0: trader2.status()
             time.sleep(60)
-
         except Exception as e:
-            print(f"[БОТ2] Ошибка цикла: {e}")
+            print(f"[БОТ2] Ошибка: {e}")
             time.sleep(15)
