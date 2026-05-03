@@ -1,23 +1,16 @@
 import ccxt, pandas as pd, numpy as np, time, requests, json, os
 from datetime import datetime
 
-# ══════════════════════════════════════════════════
-#   БОТ 3 — Форекс на OKX
-#   Стратегия: Аккумуляция→Манипуляция→FVG
-#   Пары: EUR, GBP, AUD, JPY, CAD
-# ══════════════════════════════════════════════════
-
 FOREX_PAIRS = [
-    "EUR/USDT:USDT",   # Евро
-    "GBP/USDT:USDT",   # Фунт
-    "AUD/USDT:USDT",   # Австралийский доллар
+    "EUR/USDT:USDT",
+    "GBP/USDT:USDT",
+    "AUD/USDT:USDT",
 ]
 
 LTF="15m"; MTF="1h"; HTF="4h"
-LEVERAGE=10; RISK_PERCENT=1.0
+LEVERAGE=10; RISK_PERCENT=0.5
 START_BALANCE=1000.0; SWING_LOOKBACK=5
-MAX_DAILY_TRADES=3
-DAILY_STOP_LOSS=3.0
+MAX_DAILY_TRADES=2; DAILY_STOP_LOSS=2.0
 TP1_RR=1.5; TP2_RR=3.0
 LOG_FILE3="paper_trades_bot3.json"
 
@@ -53,7 +46,7 @@ def detect_accumulation(df, lookback=20, threshold=0.03):
     low=recent["low"].min()
     range_pct=(high-low)/low
     return {
-        "is_accumulation": range_pct < threshold,
+        "is_accumulation": range_pct<threshold,
         "range_high": high,
         "range_low": low,
         "range_pct": range_pct,
@@ -63,8 +56,8 @@ def detect_accumulation(df, lookback=20, threshold=0.03):
 def detect_manipulation(df_mtf, accum):
     if not accum["is_accumulation"]: return None
     last=df_mtf.iloc[-1]
-    bull=(last["low"] < accum["range_low"] and last["close"] > accum["range_low"])
-    bear=(last["high"] > accum["range_high"] and last["close"] < accum["range_high"])
+    bull=(last["low"]<accum["range_low"] and last["close"]>accum["range_low"])
+    bear=(last["high"]>accum["range_high"] and last["close"]<accum["range_high"])
     if bull: return {"type":"bullish","sweep":accum["range_low"]}
     if bear: return {"type":"bearish","sweep":accum["range_high"]}
     return None
@@ -81,12 +74,11 @@ def find_fvg(df, manip_type, lookback=15):
     return fvgs[-1] if fvgs else None
 
 def is_forex_session():
-    """Торгуем только в активные форекс сессии"""
     hour=datetime.utcnow().hour
     day=datetime.utcnow().weekday()
-    if day >= 5: return False  # выходные
-    london=(8 <= hour < 17)    # Лондонская сессия
-    newyork=(13 <= hour < 22)  # Нью-Йоркская сессия
+    if day>=5: return False
+    london=(8<=hour<17)
+    newyork=(13<=hour<22)
     return london or newyork
 
 def get_signal3(ex, symbol):
@@ -99,24 +91,20 @@ def get_signal3(ex, symbol):
         df_ltf=fetch(ex,symbol,LTF,100)
         price=df_ltf["close"].iloc[-1]
 
-        # Фаза 1: Аккумуляция на 4h
-        accum=detect_accumulation(df_htf, lookback=20, threshold=0.04)
+        accum=detect_accumulation(df_htf,lookback=20,threshold=0.04)
         if not accum["is_accumulation"]:
             return None, "Нет аккумуляции"
 
-        # Фаза 2: Манипуляция на 1h
-        manip=detect_manipulation(df_mtf, accum)
+        manip=detect_manipulation(df_mtf,accum)
         if not manip:
             return None, "Нет манипуляции"
 
-        # Фаза 3: FVG на 15m
-        fvg=find_fvg(df_ltf, manip["type"], lookback=15)
+        fvg=find_fvg(df_ltf,manip["type"])
         if not fvg:
             return None, "Нет FVG"
 
-        # Фаза 4: Цена в FVG
-        if not (fvg["bot"] <= price <= fvg["top"]):
-            return None, f"Цена не в FVG"
+        if not (fvg["bot"]<=price<=fvg["top"]):
+            return None, "Цена не в FVG"
 
         if manip["type"]=="bullish":
             sl=accum["range_low"]*0.999
@@ -196,6 +184,7 @@ class Trader3:
         self.save()
         msg=(f"{'📈' if sig['side']=='buy' else '📉'} {sig['side'].upper()}\n"
              f"Пара: {sig['symbol']}\n"
+             f"Стратегия: {sig.get('strategy','')}\n"
              f"Вход: {sig['entry']:.5f}\n"
              f"SL: {sig['sl']:.5f}\n"
              f"TP1: {sig['tp1']:.5f}\n"
@@ -222,7 +211,7 @@ class Trader3:
                 self.pos["sl"]=entry
                 self.pos["qty"]=qty/2
                 self.save()
-                msg=f"⚡ 50% закрыто\n{symbol} | +{pnl_half:.2f} USDT\nБаланс: {self.bal:.2f}"
+                msg=f"⚡ 50% закрыто\n{symbol}\nTP1: {tp1:.5f}\nPnL: +{pnl_half:.2f} USDT\nБаланс: {self.bal:.2f}"
                 print(f"\n[БОТ3] {msg}")
                 send_telegram(msg)
                 return
@@ -236,15 +225,17 @@ class Trader3:
             if hit_tp2: self.wins+=1
             else: self.losses+=1
             self.trades.append({
-                "time":datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "symbol":symbol,"side":s,
-                "entry":entry,"exit":ep,
-                "pnl":round(pnl,2),
-                "result":"win" if hit_tp2 else "loss",
-                "strategy":"Forex:Accum→FVG"
+                "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "symbol": symbol, "side": s,
+                "entry": entry, "exit": ep,
+                "sl": self.pos.get("sl",0),
+                "tp1": tp1, "tp2": tp2,
+                "pnl": round(pnl,2),
+                "result": "win" if hit_tp2 else "loss",
+                "strategy": self.pos.get("strategy","Forex:Accum→FVG")
             })
             msg=(f"{'✅ ТЕЙК' if hit_tp2 else '❌ СТОП'}\n"
-                 f"{symbol} | {ep:.5f}\n"
+                 f"{symbol} | Выход: {ep:.5f}\n"
                  f"PnL: {pnl:+.2f} USDT\n"
                  f"Баланс: {self.bal:.2f}")
             print(f"\n[БОТ3] {msg}")
@@ -258,7 +249,7 @@ class Trader3:
         profit=self.bal-START_BALANCE
         session="🟢 Активная" if is_forex_session() else "🔴 Закрыта"
         print(f"\n[БОТ3] {'─'*40}")
-        print(f"[БОТ3] 💱 ФОРЕКС БОТ | Сессия: {session}")
+        print(f"[БОТ3] 💱 ФОРЕКС | Сессия: {session}")
         print(f"[БОТ3] 💰 Баланс: {self.bal:.2f} USDT ({profit:+.2f})")
         print(f"[БОТ3] 📊 Позиция: {'Нет' if not self.pos else self.pos['side'].upper()}")
         print(f"[БОТ3] 🏆 {self.wins}W/{self.losses}L | WR: {wr:.1f}%")
@@ -274,11 +265,10 @@ def run_bot3(ex):
     while True:
         try:
             scan+=1
-            session=is_forex_session()
-            if not session:
+            if not is_forex_session():
                 if scan%10==0:
-                    print(f"[БОТ3] 🔴 Форекс закрыт — жду открытия сессии...")
-                time.sleep(300)  # Проверяем каждые 5 минут
+                    print(f"[БОТ3] 🔴 Форекс закрыт — жду сессии...")
+                time.sleep(300)
                 continue
 
             for symbol in FOREX_PAIRS:
