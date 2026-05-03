@@ -237,7 +237,7 @@ class Trader3:
         print(f"[БОТ3] 🏆 {self.wins}W/{self.losses}L | WR: {wr:.1f}%")
         print(f"[БОТ3] {'─'*40}")
 
-def run_bot3(ex):
+def run_bot2(ex, symbols):
     trader3=Trader3()
     scan=0
     print("\n[БОТ3] 🚀 Форекс бот запущен!")
