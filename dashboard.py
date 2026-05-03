@@ -369,8 +369,12 @@ def index():
 
 @app.route('/api/all')
 def api_all():
-    def load(filename):
+    try:
+        from database import get_all_states
+        return jsonify(get_all_states())
+    except Exception as e:
         default = {"balance":1000,"wins":0,"losses":0,"trades":[],"daily_trades":0,"daily_loss":0,"position":None}
+        return jsonify({"bot1":default.copy(),"bot2":default.copy(),"bot3":default.copy()})
         try:
             if os.path.exists(filename):
                 with open(filename) as f:
