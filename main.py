@@ -2,15 +2,14 @@ import ccxt, pandas as pd, numpy as np, time, requests, json, os, threading
 from datetime import datetime
 from bot2 import run_bot2
 from bot3_forex import run_bot3
+from database import load_state, save_state, save_trade, connect_db
 
 LTF="15m"; HTF="1h"; MTF="4h"
 LEVERAGE=10; RISK_PERCENT=1.0
 START_BALANCE=1000.0; SWING_LOOKBACK=5
 TOP_PAIRS=5; UPDATE_PAIRS_EVERY=30
-MAX_DAILY_TRADES=3
-DAILY_STOP_LOSS=3.0
+MAX_DAILY_TRADES=3; DAILY_STOP_LOSS=3.0
 TP1_RR=1.0; TP2_RR=2.0
-LOG_FILE="paper_trades.json"
 
 TELEGRAM_TOKEN=""
 TELEGRAM_CHAT_ID=""
@@ -113,32 +112,20 @@ def signal(ex,symbol,trend,mtf_trend):
 
 class Trader:
     def __init__(self):
-        self.bal=START_BALANCE; self.pos=None
-        self.wins=0; self.losses=0; self.trades=[]
-        self.daily_trades=0; self.daily_loss=0.0
+        state=load_state("bot1", START_BALANCE)
+        self.bal=state["balance"]
+        self.wins=state["wins"]
+        self.losses=state["losses"]
+        self.trades=state["trades"]
+        self.daily_trades=state["daily_trades"]
+        self.daily_loss=state["daily_loss"]
+        self.pos=state["position"]
         self.last_day=datetime.now().date()
-        self._load()
-
-    def _load(self):
-        if os.path.exists(LOG_FILE):
-            with open(LOG_FILE) as f:
-                d=json.load(f)
-                self.bal=d.get("balance",START_BALANCE)
-                self.wins=d.get("wins",0)
-                self.losses=d.get("losses",0)
-                self.trades=d.get("trades",[])
-                self.daily_trades=d.get("daily_trades",0)
-                self.daily_loss=d.get("daily_loss",0.0)
-            print(f"[БОТ1] Загружено | Баланс: {self.bal:.2f} USDT")
+        print(f"[БОТ1] Загружено | Баланс: {self.bal:.2f} USDT | Сделок: {len(self.trades)}")
 
     def save(self):
-        with open(LOG_FILE,"w") as f:
-            json.dump({
-                "balance":self.bal,"wins":self.wins,
-                "losses":self.losses,"trades":self.trades[-50:],
-                "daily_trades":self.daily_trades,
-                "daily_loss":self.daily_loss,"position":self.pos
-            },f,indent=2)
+        save_state("bot1", self.bal, self.wins, self.losses,
+                   self.daily_trades, self.daily_loss, self.pos)
 
     def reset_daily(self):
         today=datetime.now().date()
@@ -206,7 +193,7 @@ class Trader:
             if pnl<0: self.daily_loss+=abs(pnl)
             if hit_tp2: self.wins+=1
             else: self.losses+=1
-            self.trades.append({
+            trade={
                 "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "symbol": symbol, "side": s,
                 "entry": entry, "exit": ep,
@@ -215,7 +202,8 @@ class Trader:
                 "pnl": round(pnl,2),
                 "result": "win" if hit_tp2 else "loss",
                 "strategy": self.pos.get("strategy","BOS+OTE+SFP")
-            })
+            }
+            save_trade(trade, "bot1")
             msg=(f"{'✅ ТЕЙК ПРОФИТ' if hit_tp2 else '❌ СТОП ЛОСС'}\n"
                  f"{symbol} | Выход: {ep:.4f}\n"
                  f"PnL: {pnl:+.2f} USDT\n"
@@ -250,17 +238,16 @@ threading.Thread(target=run_dashboard, daemon=True).start()
 print("✅ Дашборд запущен!")
 
 threading.Thread(target=run_bot2, args=(ex, symbols), daemon=True).start()
-print("✅ Бот 2 запущен! (Аккумуляция→Манипуляция→FVG)")
+print("✅ Бот 2 запущен!")
 
 threading.Thread(target=run_bot3, args=(ex,), daemon=True).start()
-print("✅ Бот 3 запущен! (Форекс EUR/GBP/AUD)")
+print("✅ Бот 3 запущен!")
 
 trader=Trader()
 scan=0
 
-print(f"\n✅ Бот 1 запущен! (BOS+OTE+SFP)")
-print(f"Все 3 бота работают параллельно!\n")
-send_telegram(f"🚀 Все 3 бота запущены!\nБот1: BOS+OTE+SFP\nБот2: Аккум→FVG\nБот3: Форекс\nБаланс каждого: {START_BALANCE} USDT")
+print(f"\n✅ Бот 1 запущен! Все 3 бота работают!\n")
+send_telegram(f"🚀 Все 3 бота запущены!\nБот1: BOS+OTE+SFP\nБот2: Аккум→FVG\nБот3: Форекс\nБаланс: {START_BALANCE} USDT")
 
 while True:
     try:
