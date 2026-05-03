@@ -1,12 +1,12 @@
 import ccxt, pandas as pd, numpy as np, time, requests, json, os
 from datetime import datetime
+from database import load_state, save_state, save_trade
 
 LTF="15m"; MTF="1h"; HTF="4h"
 LEVERAGE=10; RISK_PERCENT=1.0
 START_BALANCE=1000.0; SWING_LOOKBACK=5
 MAX_DAILY_TRADES=3; DAILY_STOP_LOSS=3.0
 TP1_RR=1.0; TP2_RR=2.0
-LOG_FILE2="paper_trades_bot2.json"
 
 TELEGRAM_TOKEN=""
 TELEGRAM_CHAT_ID=""
@@ -40,7 +40,7 @@ def detect_accumulation(df, lookback=20, threshold=0.04):
     low=recent["low"].min()
     range_pct=(high-low)/low
     return {
-        "is_accumulation": range_pct < threshold,
+        "is_accumulation": range_pct<threshold,
         "range_high": high,
         "range_low": low,
         "range_pct": range_pct,
@@ -96,7 +96,7 @@ def get_signal2(ex, symbol):
             return None, "Нет FVG"
 
         if not (fvg["bot"]<=price<=fvg["top"]):
-            return None, f"Цена не в FVG"
+            return None, "Цена не в FVG"
 
         target=find_target(df_htf, manip["type"], accum)
 
@@ -123,32 +123,20 @@ def get_signal2(ex, symbol):
 
 class Trader2:
     def __init__(self):
-        self.bal=START_BALANCE; self.pos=None
-        self.wins=0; self.losses=0; self.trades=[]
-        self.daily_trades=0; self.daily_loss=0.0
+        state=load_state("bot2", START_BALANCE)
+        self.bal=state["balance"]
+        self.wins=state["wins"]
+        self.losses=state["losses"]
+        self.trades=state["trades"]
+        self.daily_trades=state["daily_trades"]
+        self.daily_loss=state["daily_loss"]
+        self.pos=state["position"]
         self.last_day=datetime.now().date()
-        self._load()
-
-    def _load(self):
-        if os.path.exists(LOG_FILE2):
-            with open(LOG_FILE2) as f:
-                d=json.load(f)
-                self.bal=d.get("balance",START_BALANCE)
-                self.wins=d.get("wins",0)
-                self.losses=d.get("losses",0)
-                self.trades=d.get("trades",[])
-                self.daily_trades=d.get("daily_trades",0)
-                self.daily_loss=d.get("daily_loss",0.0)
-            print(f"[БОТ2] Загружено | Баланс: {self.bal:.2f} USDT")
+        print(f"[БОТ2] Загружено | Баланс: {self.bal:.2f} USDT | Сделок: {len(self.trades)}")
 
     def save(self):
-        with open(LOG_FILE2,"w") as f:
-            json.dump({
-                "balance":self.bal,"wins":self.wins,
-                "losses":self.losses,"trades":self.trades[-50:],
-                "daily_trades":self.daily_trades,
-                "daily_loss":self.daily_loss,"position":self.pos
-            },f,indent=2)
+        save_state("bot2", self.bal, self.wins, self.losses,
+                   self.daily_trades, self.daily_loss, self.pos)
 
     def reset_daily(self):
         today=datetime.now().date()
@@ -212,7 +200,7 @@ class Trader2:
             if pnl<0: self.daily_loss+=abs(pnl)
             if hit_tp2: self.wins+=1
             else: self.losses+=1
-            self.trades.append({
+            trade={
                 "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "symbol": symbol, "side": s,
                 "entry": entry, "exit": ep,
@@ -221,7 +209,8 @@ class Trader2:
                 "pnl": round(pnl,2),
                 "result": "win" if hit_tp2 else "loss",
                 "strategy": self.pos.get("strategy","Accum→Manip→FVG")
-            })
+            }
+            save_trade(trade, "bot2")
             msg=(f"{'✅ ТЕЙК ПРОФИТ' if hit_tp2 else '❌ СТОП ЛОСС'}\n"
                  f"{symbol} | Выход: {ep:.4f}\n"
                  f"PnL: {pnl:+.2f} USDT\n"
