@@ -2,11 +2,17 @@ import ccxt, pandas as pd, numpy as np, time, requests, json, os
 from datetime import datetime
 from database import load_state, save_state, save_trade
 
+FOREX_PAIRS = [
+    "EUR/USDT:USDT",
+    "GBP/USDT:USDT",
+    "AUD/USDT:USDT",
+]
+
 LTF="15m"; MTF="1h"; HTF="4h"
-LEVERAGE=10; RISK_PERCENT=1.0
+LEVERAGE=10; RISK_PERCENT=0.5
 START_BALANCE=1000.0; SWING_LOOKBACK=5
-MAX_DAILY_TRADES=3; DAILY_STOP_LOSS=3.0
-TP1_RR=1.0; TP2_RR=2.0
+MAX_DAILY_TRADES=2; DAILY_STOP_LOSS=2.0
+TP1_RR=1.5; TP2_RR=3.0
 
 TELEGRAM_TOKEN=""
 TELEGRAM_CHAT_ID=""
@@ -15,7 +21,7 @@ def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     try:
         url=f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url,data={"chat_id":TELEGRAM_CHAT_ID,"text":f"🤖 БОТ 2\n{msg}"},timeout=5)
+        requests.post(url,data={"chat_id":TELEGRAM_CHAT_ID,"text":f"💱 БОТ 3 ФОРЕКС\n{msg}"},timeout=5)
     except: pass
 
 def fetch(ex,sym,tf,limit=200):
@@ -34,7 +40,7 @@ def swings(df,n=5):
     df["sl"]=df["low"].where(df["low"]==df["low"].rolling(n*2+1,center=True).min())
     return df
 
-def detect_accumulation(df, lookback=20, threshold=0.04):
+def detect_accumulation(df, lookback=20, threshold=0.03):
     recent=df.tail(lookback)
     high=recent["high"].max()
     low=recent["low"].min()
@@ -67,63 +73,57 @@ def find_fvg(df, manip_type, lookback=15):
             fvgs.append({"type":"bearish","top":p["low"],"bot":n["high"],"mid":(p["low"]+n["high"])/2})
     return fvgs[-1] if fvgs else None
 
-def find_target(df_htf, manip_type, accum):
-    sp=swings(df_htf, SWING_LOOKBACK)
-    if manip_type=="bullish":
-        highs=sp["sh"].dropna()
-        return highs.iloc[-1] if len(highs)>=1 else accum["range_high"]
-    else:
-        lows=sp["sl"].dropna()
-        return lows.iloc[-1] if len(lows)>=1 else accum["range_low"]
+def is_forex_session():
+    hour=datetime.utcnow().hour
+    day=datetime.utcnow().weekday()
+    if day>=5: return False
+    london=(8<=hour<17)
+    newyork=(13<=hour<22)
+    return london or newyork
 
-def get_signal2(ex, symbol):
+def get_signal3(ex, symbol):
     try:
+        if not is_forex_session():
+            return None, "Не торговая сессия"
         df_htf=fetch(ex,symbol,HTF,100)
         df_mtf=fetch(ex,symbol,MTF,100)
         df_ltf=fetch(ex,symbol,LTF,100)
         price=df_ltf["close"].iloc[-1]
-
-        accum=detect_accumulation(df_htf)
+        accum=detect_accumulation(df_htf,lookback=20,threshold=0.04)
         if not accum["is_accumulation"]:
             return None, "Нет аккумуляции"
-
-        manip=detect_manipulation(df_mtf, accum)
+        manip=detect_manipulation(df_mtf,accum)
         if not manip:
             return None, "Нет манипуляции"
-
-        fvg=find_fvg(df_ltf, manip["type"])
+        fvg=find_fvg(df_ltf,manip["type"])
         if not fvg:
             return None, "Нет FVG"
-
         if not (fvg["bot"]<=price<=fvg["top"]):
             return None, "Цена не в FVG"
-
-        target=find_target(df_htf, manip["type"], accum)
-
         if manip["type"]=="bullish":
             sl=accum["range_low"]*0.999
             tp1=price+(price-sl)*TP1_RR
-            tp2=target if target and target>price else price+(price-sl)*TP2_RR
+            tp2=price+(price-sl)*TP2_RR
             return {
                 "side":"buy","entry":price,"sl":sl,
                 "tp1":tp1,"tp2":tp2,"symbol":symbol,
-                "qty_closed":False,"strategy":"Accum→Manip→FVG"
-            }, "✅ Сигнал!"
+                "qty_closed":False,"strategy":"Forex:Accum→FVG"
+            }, "✅ Сигнал ЛОНГ!"
         else:
             sl=accum["range_high"]*1.001
             tp1=price-(sl-price)*TP1_RR
-            tp2=target if target and target<price else price-(sl-price)*TP2_RR
+            tp2=price-(sl-price)*TP2_RR
             return {
                 "side":"sell","entry":price,"sl":sl,
                 "tp1":tp1,"tp2":tp2,"symbol":symbol,
-                "qty_closed":False,"strategy":"Accum→Manip→FVG"
-            }, "✅ Сигнал!"
+                "qty_closed":False,"strategy":"Forex:Accum→FVG"
+            }, "✅ Сигнал ШОРТ!"
     except Exception as e:
         return None, f"Ошибка: {e}"
 
-class Trader2:
+class Trader3:
     def __init__(self):
-        state=load_state("bot2", START_BALANCE)
+        state=load_state("bot3", START_BALANCE)
         self.bal=state["balance"]
         self.wins=state["wins"]
         self.losses=state["losses"]
@@ -132,10 +132,10 @@ class Trader2:
         self.daily_loss=state["daily_loss"]
         self.pos=state["position"]
         self.last_day=datetime.now().date()
-        print(f"[БОТ2] Загружено | Баланс: {self.bal:.2f} USDT | Сделок: {len(self.trades)}")
+        print(f"[БОТ3] Загружено | Баланс: {self.bal:.2f} USDT | Сделок: {len(self.trades)}")
 
     def save(self):
-        save_state("bot2", self.bal, self.wins, self.losses,
+        save_state("bot3", self.bal, self.wins, self.losses,
                    self.daily_trades, self.daily_loss, self.pos)
 
     def reset_daily(self):
@@ -143,11 +143,16 @@ class Trader2:
         if today!=self.last_day:
             self.daily_trades=0; self.daily_loss=0.0
             self.last_day=today
+            print("[БОТ3] 📅 Новый день — сброс лимитов")
 
     def can_trade(self):
         self.reset_daily()
-        if self.daily_trades>=MAX_DAILY_TRADES: return False
-        if self.daily_loss>=self.bal*(DAILY_STOP_LOSS/100): return False
+        if self.daily_trades>=MAX_DAILY_TRADES:
+            print("[БОТ3] ⛔ Лимит сделок достигнут")
+            return False
+        if self.daily_loss>=self.bal*(DAILY_STOP_LOSS/100):
+            print("[БОТ3] ⛔ Дневной стоп достигнут")
+            return False
         return True
 
     def open(self,sig):
@@ -158,15 +163,15 @@ class Trader2:
         self.pos={**sig,"qty":qty}
         self.daily_trades+=1
         self.save()
-        msg=(f"{'📈' if sig['side']=='buy' else '📉'} ПОЗИЦИЯ: {sig['side'].upper()}\n"
+        msg=(f"{'📈' if sig['side']=='buy' else '📉'} {sig['side'].upper()}\n"
              f"Пара: {sig['symbol']}\n"
              f"Стратегия: {sig.get('strategy','')}\n"
-             f"Вход: {sig['entry']:.4f}\n"
-             f"SL: {sig['sl']:.4f}\n"
-             f"TP1: {sig['tp1']:.4f}\n"
-             f"TP2: {sig['tp2']:.4f}\n"
+             f"Вход: {sig['entry']:.5f}\n"
+             f"SL: {sig['sl']:.5f}\n"
+             f"TP1: {sig['tp1']:.5f}\n"
+             f"TP2: {sig['tp2']:.5f}\n"
              f"Риск: {risk:.2f} USDT")
-        print(f"\n[БОТ2] {'='*40}\n{msg}\n{'='*40}")
+        print(f"\n[БОТ3] {'='*40}\n{msg}\n{'='*40}")
         send_telegram(msg)
 
     def check(self,price,symbol):
@@ -187,8 +192,8 @@ class Trader2:
                 self.pos["sl"]=entry
                 self.pos["qty"]=qty/2
                 self.save()
-                msg=f"⚡ ЧАСТИЧНОЕ ЗАКРЫТИЕ 50%\n{symbol} | PnL: +{pnl_half:.2f} USDT\nБаланс: {self.bal:.2f}"
-                print(f"\n[БОТ2] {msg}")
+                msg=f"⚡ 50% закрыто\n{symbol}\nTP1: {tp1:.5f}\nPnL: +{pnl_half:.2f} USDT\nБаланс: {self.bal:.2f}"
+                print(f"\n[БОТ3] {msg}")
                 send_telegram(msg)
                 return
         hit_tp2=(s=="buy" and price>=tp2) or (s=="sell" and price<=tp2)
@@ -208,14 +213,14 @@ class Trader2:
                 "tp1": tp1, "tp2": tp2,
                 "pnl": round(pnl,2),
                 "result": "win" if hit_tp2 else "loss",
-                "strategy": self.pos.get("strategy","Accum→Manip→FVG")
+                "strategy": self.pos.get("strategy","Forex:Accum→FVG")
             }
-            save_trade(trade, "bot2")
-            msg=(f"{'✅ ТЕЙК ПРОФИТ' if hit_tp2 else '❌ СТОП ЛОСС'}\n"
-                 f"{symbol} | Выход: {ep:.4f}\n"
+            save_trade(trade, "bot3")
+            msg=(f"{'✅ ТЕЙК' if hit_tp2 else '❌ СТОП'}\n"
+                 f"{symbol} | Выход: {ep:.5f}\n"
                  f"PnL: {pnl:+.2f} USDT\n"
-                 f"Баланс: {self.bal:.2f} USDT")
-            print(f"\n[БОТ2] {msg}")
+                 f"Баланс: {self.bal:.2f}")
+            print(f"\n[БОТ3] {msg}")
             send_telegram(msg)
             self.pos=None
             self.save()
@@ -224,35 +229,46 @@ class Trader2:
         total=self.wins+self.losses
         wr=(self.wins/total*100) if total>0 else 0
         profit=self.bal-START_BALANCE
-        print(f"\n[БОТ2] {'─'*40}")
-        print(f"[БОТ2] 💰 Баланс: {self.bal:.2f} USDT ({profit:+.2f})")
-        print(f"[БОТ2] 📊 Позиция: {'Нет' if not self.pos else self.pos['side'].upper()}")
-        print(f"[БОТ2] 🏆 {self.wins}W/{self.losses}L | WR: {wr:.1f}%")
-        print(f"[БОТ2] {'─'*40}")
+        session="🟢 Активная" if is_forex_session() else "🔴 Закрыта"
+        print(f"\n[БОТ3] {'─'*40}")
+        print(f"[БОТ3] 💱 ФОРЕКС | Сессия: {session}")
+        print(f"[БОТ3] 💰 Баланс: {self.bal:.2f} USDT ({profit:+.2f})")
+        print(f"[БОТ3] 📊 Позиция: {'Нет' if not self.pos else self.pos['side'].upper()}")
+        print(f"[БОТ3] 🏆 {self.wins}W/{self.losses}L | WR: {wr:.1f}%")
+        print(f"[БОТ3] {'─'*40}")
 
-def run_bot2(ex, symbols):
-    trader2=Trader2()
+def run_bot3(ex):
+    trader3=Trader3()
     scan=0
-    print("\n[БОТ2] 🚀 Запущен! Стратегия: Аккумуляция→Манипуляция→FVG")
+    print("\n[БОТ3] 🚀 Форекс бот запущен!")
+    print(f"[БОТ3] Пары: {FOREX_PAIRS}")
+    print(f"[БОТ3] Сессии: Лондон (08-17 UTC) + Нью-Йорк (13-22 UTC)")
     while True:
         try:
             scan+=1
-            for symbol in symbols:
+            if not is_forex_session():
+                if scan%10==0:
+                    print(f"[БОТ3] 🔴 Форекс закрыт — жду сессии...")
+                time.sleep(300)
+                continue
+            for symbol in FOREX_PAIRS:
                 try:
                     price=get_price(ex,symbol)
-                    trader2.check(price,symbol)
-                    if trader2.pos and trader2.pos.get("symbol")==symbol:
-                        print(f"[БОТ2] ⏳ {symbol}: {trader2.pos['side'].upper()} @ {trader2.pos['entry']:.4f}")
+                    name=symbol.replace("/USDT:USDT","")
+                    print(f"\n[БОТ3] [{datetime.now().strftime('%H:%M:%S')}] {name}: {price:.5f}")
+                    trader3.check(price,symbol)
+                    if trader3.pos and trader3.pos.get("symbol")==symbol:
+                        print(f"[БОТ3] ⏳ {trader3.pos['side'].upper()} @ {trader3.pos['entry']:.5f} | SL:{trader3.pos['sl']:.5f} | TP2:{trader3.pos['tp2']:.5f}")
                     else:
-                        sig,reason=get_signal2(ex,symbol)
-                        print(f"[БОТ2] {symbol}: {reason}")
-                        if sig and not trader2.pos:
-                            trader2.open(sig)
+                        sig,reason=get_signal3(ex,symbol)
+                        print(f"[БОТ3] {name}: {reason}")
+                        if sig and not trader3.pos:
+                            trader3.open(sig)
                 except Exception as e:
-                    print(f"[БОТ2] Ошибка {symbol}: {e}")
+                    print(f"[БОТ3] Ошибка {symbol}: {e}")
                     continue
-            if scan%5==0: trader2.status()
+            if scan%5==0: trader3.status()
             time.sleep(60)
         except Exception as e:
-            print(f"[БОТ2] Ошибка: {e}")
+            print(f"[БОТ3] Ошибка: {e}")
             time.sleep(15)
