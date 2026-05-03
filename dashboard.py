@@ -40,11 +40,11 @@ HTML = """
         .compare-card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:18px; text-align:center; }
         .trades-section { padding:0 30px 30px; }
         .trades-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:15px; }
-        .trades-card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:18px; }
+        .trades-card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:18px; overflow-x:auto; }
         .trades-title { font-size:12px; font-weight:600; margin-bottom:12px; }
-        table { width:100%; border-collapse:collapse; font-size:11px; }
-        th { color:#8b949e; text-align:left; padding:5px 8px; border-bottom:1px solid #30363d; }
-        td { padding:7px 8px; border-bottom:1px solid #21262d; }
+        table { width:100%; border-collapse:collapse; font-size:11px; min-width:500px; }
+        th { color:#8b949e; text-align:left; padding:6px 8px; border-bottom:1px solid #30363d; white-space:nowrap; }
+        td { padding:8px 8px; border-bottom:1px solid #21262d; vertical-align:top; }
         tr:hover { background:#1c2128; }
         .badge { padding:2px 6px; border-radius:20px; font-size:10px; font-weight:600; }
         .badge-win { background:#1a3a1e; color:#3fb950; }
@@ -57,6 +57,11 @@ HTML = """
         .yellow { color:#d29922; }
         .session-on { color:#3fb950; font-size:11px; }
         .session-off { color:#f85149; font-size:11px; }
+        .price-entry { color:#58a6ff; font-weight:600; }
+        .price-exit { font-weight:600; }
+        .price-sl { color:#f85149; font-size:10px; }
+        .price-tp { color:#3fb950; font-size:10px; }
+        .price-tp1 { color:#d29922; font-size:10px; }
     </style>
 </head>
 <body>
@@ -69,131 +74,71 @@ HTML = """
         </div>
     </div>
 
-    <!-- 3 бота -->
     <div class="bots-grid">
-        <!-- Бот 1 -->
         <div class="bot-panel bot1-panel">
             <div class="bot-title bot1-title">🔵 Бот 1 — BOS+OTE+SFP</div>
             <div class="stats-grid">
-                <div class="stat">
-                    <div class="stat-label">Баланс</div>
-                    <div class="stat-value blue" id="b1-balance">1000</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-label">WinRate</div>
-                    <div class="stat-value" id="b1-wr">0%</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-label">Прибыль</div>
-                    <div class="stat-value" id="b1-profit">0</div>
-                </div>
+                <div class="stat"><div class="stat-label">Баланс</div><div class="stat-value blue" id="b1-balance">1000</div></div>
+                <div class="stat"><div class="stat-label">WinRate</div><div class="stat-value" id="b1-wr">0%</div></div>
+                <div class="stat"><div class="stat-label">Прибыль</div><div class="stat-value" id="b1-profit">0</div></div>
             </div>
             <div class="stats-grid">
-                <div class="stat">
-                    <div class="stat-label">Сделок</div>
-                    <div class="stat-value" id="b1-total">0</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-label">Wins</div>
-                    <div class="stat-value green" id="b1-wins">0</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-label">Losses</div>
-                    <div class="stat-value red" id="b1-losses">0</div>
-                </div>
+                <div class="stat"><div class="stat-label">Сделок</div><div class="stat-value" id="b1-total">0</div></div>
+                <div class="stat"><div class="stat-label">Wins</div><div class="stat-value green" id="b1-wins">0</div></div>
+                <div class="stat"><div class="stat-label">Losses</div><div class="stat-value red" id="b1-losses">0</div></div>
             </div>
             <div class="pos-block" id="b1-pos">📊 Позиция: Нет</div>
         </div>
 
-        <!-- Бот 2 -->
         <div class="bot-panel bot2-panel">
             <div class="bot-title bot2-title">🟢 Бот 2 — Аккум→Манип→FVG</div>
             <div class="stats-grid">
-                <div class="stat">
-                    <div class="stat-label">Баланс</div>
-                    <div class="stat-value green" id="b2-balance">1000</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-label">WinRate</div>
-                    <div class="stat-value" id="b2-wr">0%</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-label">Прибыль</div>
-                    <div class="stat-value" id="b2-profit">0</div>
-                </div>
+                <div class="stat"><div class="stat-label">Баланс</div><div class="stat-value green" id="b2-balance">1000</div></div>
+                <div class="stat"><div class="stat-label">WinRate</div><div class="stat-value" id="b2-wr">0%</div></div>
+                <div class="stat"><div class="stat-label">Прибыль</div><div class="stat-value" id="b2-profit">0</div></div>
             </div>
             <div class="stats-grid">
-                <div class="stat">
-                    <div class="stat-label">Сделок</div>
-                    <div class="stat-value" id="b2-total">0</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-label">Wins</div>
-                    <div class="stat-value green" id="b2-wins">0</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-label">Losses</div>
-                    <div class="stat-value red" id="b2-losses">0</div>
-                </div>
+                <div class="stat"><div class="stat-label">Сделок</div><div class="stat-value" id="b2-total">0</div></div>
+                <div class="stat"><div class="stat-label">Wins</div><div class="stat-value green" id="b2-wins">0</div></div>
+                <div class="stat"><div class="stat-label">Losses</div><div class="stat-value red" id="b2-losses">0</div></div>
             </div>
             <div class="pos-block" id="b2-pos">📊 Позиция: Нет</div>
         </div>
 
-        <!-- Бот 3 -->
         <div class="bot-panel bot3-panel">
             <div class="bot-title bot3-title">🟡 Бот 3 — Форекс EUR/GBP/AUD</div>
             <div class="stats-grid">
-                <div class="stat">
-                    <div class="stat-label">Баланс</div>
-                    <div class="stat-value yellow" id="b3-balance">1000</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-label">WinRate</div>
-                    <div class="stat-value" id="b3-wr">0%</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-label">Прибыль</div>
-                    <div class="stat-value" id="b3-profit">0</div>
-                </div>
+                <div class="stat"><div class="stat-label">Баланс</div><div class="stat-value yellow" id="b3-balance">1000</div></div>
+                <div class="stat"><div class="stat-label">WinRate</div><div class="stat-value" id="b3-wr">0%</div></div>
+                <div class="stat"><div class="stat-label">Прибыль</div><div class="stat-value" id="b3-profit">0</div></div>
             </div>
             <div class="stats-grid">
-                <div class="stat">
-                    <div class="stat-label">Сделок</div>
-                    <div class="stat-value" id="b3-total">0</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-label">Wins</div>
-                    <div class="stat-value green" id="b3-wins">0</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-label">Losses</div>
-                    <div class="stat-value red" id="b3-losses">0</div>
-                </div>
+                <div class="stat"><div class="stat-label">Сделок</div><div class="stat-value" id="b3-total">0</div></div>
+                <div class="stat"><div class="stat-label">Wins</div><div class="stat-value green" id="b3-wins">0</div></div>
+                <div class="stat"><div class="stat-label">Losses</div><div class="stat-value red" id="b3-losses">0</div></div>
             </div>
             <div class="pos-block" id="b3-pos">📊 Позиция: Нет</div>
-            <div id="b3-session" class="session-off" style="margin-top:6px; text-align:center">🔴 Сессия закрыта</div>
+            <div id="b3-session" class="session-off" style="margin-top:6px;text-align:center">🔴 Сессия закрыта</div>
         </div>
     </div>
 
-    <!-- Сравнение -->
     <div class="compare-section">
         <div class="compare-grid">
             <div class="compare-card">
-                <div style="color:#8b949e; font-size:12px; margin-bottom:8px">🏆 Лидер по балансу</div>
-                <div style="font-size:20px; font-weight:700" id="leader-balance">-</div>
+                <div style="color:#8b949e;font-size:12px;margin-bottom:8px">🏆 Лидер по балансу</div>
+                <div style="font-size:18px;font-weight:700" id="leader-balance">-</div>
             </div>
             <div class="compare-card">
-                <div style="color:#8b949e; font-size:12px; margin-bottom:8px">🎯 Лидер по WinRate</div>
-                <div style="font-size:20px; font-weight:700" id="leader-wr">-</div>
+                <div style="color:#8b949e;font-size:12px;margin-bottom:8px">🎯 Лидер по WinRate</div>
+                <div style="font-size:18px;font-weight:700" id="leader-wr">-</div>
             </div>
             <div class="compare-card">
-                <div style="color:#8b949e; font-size:12px; margin-bottom:8px">📈 Всего сделок</div>
-                <div style="font-size:20px; font-weight:700" id="total-trades">0</div>
+                <div style="color:#8b949e;font-size:12px;margin-bottom:8px">📈 Всего сделок</div>
+                <div style="font-size:18px;font-weight:700" id="total-trades">0</div>
             </div>
         </div>
     </div>
 
-    <!-- Графики -->
     <div class="charts-section">
         <div class="charts-grid">
             <div class="chart-card">
@@ -207,13 +152,12 @@ HTML = """
         </div>
     </div>
 
-    <!-- Журналы -->
     <div class="trades-section">
         <div class="trades-grid">
             <div class="trades-card">
                 <div class="trades-title bot1-title">📋 Бот 1 — BOS+OTE+SFP</div>
                 <table>
-                    <thead><tr><th>Время</th><th>Пара</th><th>Сторона</th><th>PnL</th><th>Итог</th></tr></thead>
+                    <thead><tr><th>Время</th><th>Пара</th><th>Сторона</th><th>Вход</th><th>Выход</th><th>SL / TP1 / TP2</th><th>PnL</th><th>Итог</th></tr></thead>
                     <tbody id="b1-trades"></tbody>
                 </table>
                 <div id="b1-empty" style="text-align:center;color:#8b949e;padding:15px;font-size:12px">Сделок пока нет...</div>
@@ -221,7 +165,7 @@ HTML = """
             <div class="trades-card">
                 <div class="trades-title bot2-title">📋 Бот 2 — Аккум→FVG</div>
                 <table>
-                    <thead><tr><th>Время</th><th>Пара</th><th>Сторона</th><th>PnL</th><th>Итог</th></tr></thead>
+                    <thead><tr><th>Время</th><th>Пара</th><th>Сторона</th><th>Вход</th><th>Выход</th><th>SL / TP1 / TP2</th><th>PnL</th><th>Итог</th></tr></thead>
                     <tbody id="b2-trades"></tbody>
                 </table>
                 <div id="b2-empty" style="text-align:center;color:#8b949e;padding:15px;font-size:12px">Сделок пока нет...</div>
@@ -229,7 +173,7 @@ HTML = """
             <div class="trades-card">
                 <div class="trades-title bot3-title">📋 Бот 3 — Форекс</div>
                 <table>
-                    <thead><tr><th>Время</th><th>Пара</th><th>Сторона</th><th>PnL</th><th>Итог</th></tr></thead>
+                    <thead><tr><th>Время</th><th>Пара</th><th>Сторона</th><th>Вход</th><th>Выход</th><th>SL / TP1 / TP2</th><th>PnL</th><th>Итог</th></tr></thead>
                     <tbody id="b3-trades"></tbody>
                 </table>
                 <div id="b3-empty" style="text-align:center;color:#8b949e;padding:15px;font-size:12px">Ждём торговой сессии...</div>
@@ -248,9 +192,9 @@ HTML = """
                 data: {
                     labels: ['Старт'],
                     datasets: [
-                        { label: 'Бот 1', data: [START], borderColor: '#58a6ff', backgroundColor: 'rgba(88,166,255,0.05)', fill:true, tension:0.4, pointRadius:3 },
-                        { label: 'Бот 2', data: [START], borderColor: '#3fb950', backgroundColor: 'rgba(63,185,80,0.05)', fill:true, tension:0.4, pointRadius:3 },
-                        { label: 'Бот 3 (Форекс)', data: [START], borderColor: '#d29922', backgroundColor: 'rgba(210,153,34,0.05)', fill:true, tension:0.4, pointRadius:3 }
+                        { label:'Бот 1', data:[START], borderColor:'#58a6ff', backgroundColor:'rgba(88,166,255,0.05)', fill:true, tension:0.4, pointRadius:3 },
+                        { label:'Бот 2', data:[START], borderColor:'#3fb950', backgroundColor:'rgba(63,185,80,0.05)', fill:true, tension:0.4, pointRadius:3 },
+                        { label:'Бот 3 (Форекс)', data:[START], borderColor:'#d29922', backgroundColor:'rgba(210,153,34,0.05)', fill:true, tension:0.4, pointRadius:3 }
                     ]
                 },
                 options: {
@@ -284,11 +228,10 @@ HTML = """
             });
         }
 
-        function updateBot(data, prefix, color) {
+        function updateBot(data, prefix) {
             const total = data.wins + data.losses;
             const wr = total > 0 ? (data.wins/total*100).toFixed(1) : 0;
             const profit = data.balance - START;
-
             document.getElementById(prefix+'-balance').textContent = parseFloat(data.balance).toFixed(2);
             const wrEl = document.getElementById(prefix+'-wr');
             wrEl.textContent = wr + '%';
@@ -299,20 +242,19 @@ HTML = """
             document.getElementById(prefix+'-total').textContent = total;
             document.getElementById(prefix+'-wins').textContent = data.wins;
             document.getElementById(prefix+'-losses').textContent = data.losses;
-
             if (data.position) {
                 const pos = data.position;
                 document.getElementById(prefix+'-pos').innerHTML =
                     `<b style="color:${pos.side==='buy'?'#58a6ff':'#d29922'}">${pos.side.toUpperCase()}</b>
                      ${(pos.symbol||'').replace('/USDT:USDT','')}
-                     @ ${parseFloat(pos.entry||0).toFixed(4)}
+                     @ <span style="color:#58a6ff">${parseFloat(pos.entry||0).toFixed(4)}</span>
                      | SL:<span style="color:#f85149"> ${parseFloat(pos.sl||0).toFixed(4)}</span>
-                     | TP:<span style="color:#3fb950"> ${parseFloat(pos.tp2||0).toFixed(4)}</span>`;
+                     | TP1:<span style="color:#d29922"> ${parseFloat(pos.tp1||0).toFixed(4)}</span>
+                     | TP2:<span style="color:#3fb950"> ${parseFloat(pos.tp2||0).toFixed(4)}</span>`;
             } else {
                 document.getElementById(prefix+'-pos').textContent = '📊 Позиция: Нет';
             }
-
-            return { total, wr: parseFloat(wr), profit, balance: data.balance };
+            return { total, wr: parseFloat(wr), balance: data.balance };
         }
 
         function renderTrades(trades, tbodyId, emptyId) {
@@ -322,14 +264,36 @@ HTML = """
             if (!trades || trades.length === 0) { empty.style.display='block'; return; }
             empty.style.display = 'none';
             [...trades].reverse().slice(0,10).forEach(t => {
-                const pnl = parseFloat(t.pnl);
+                const pnl = parseFloat(t.pnl||0);
+                const entry = parseFloat(t.entry||0);
+                const exit = parseFloat(t.exit||0);
+                const sl = parseFloat(t.sl||0);
+                const tp1 = parseFloat(t.tp1||0);
+                const tp2 = parseFloat(t.tp2||0);
+                const movePct = entry > 0 ? ((exit-entry)/entry*100).toFixed(2) : 0;
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td style="color:#8b949e">${(t.time||'-').slice(11)}</td>
-                    <td>${(t.symbol||'-').replace('/USDT:USDT','')}</td>
+                    <td style="color:#8b949e;white-space:nowrap">${(t.time||'-').slice(11)}<br><span style="font-size:10px">${(t.time||'-').slice(0,10)}</span></td>
+                    <td style="font-weight:600">${(t.symbol||'-').replace('/USDT:USDT','')}</td>
                     <td><span class="badge badge-${t.side}">${(t.side||'').toUpperCase()}</span></td>
-                    <td style="color:${pnl>=0?'#3fb950':'#f85149'};font-weight:600">${pnl>=0?'+':''}${pnl.toFixed(2)}</td>
-                    <td><span class="badge badge-${t.result}">${t.result==='win'?'✅':'❌'}</span></td>
+                    <td>
+                        <div class="price-entry">${entry.toFixed(4)}</div>
+                        <div style="color:#8b949e;font-size:10px">Точка входа</div>
+                    </td>
+                    <td>
+                        <div class="price-exit" style="color:${pnl>=0?'#3fb950':'#f85149'}">${exit.toFixed(4)}</div>
+                        <div style="color:#8b949e;font-size:10px">Точка выхода</div>
+                        <div style="color:#8b949e;font-size:10px">${movePct}% движение</div>
+                    </td>
+                    <td>
+                        <div class="price-sl">🛑 SL: ${sl.toFixed(4)}</div>
+                        <div class="price-tp1">⚡ TP1: ${tp1.toFixed(4)}</div>
+                        <div class="price-tp">🎯 TP2: ${tp2.toFixed(4)}</div>
+                    </td>
+                    <td style="color:${pnl>=0?'#3fb950':'#f85149'};font-weight:700">
+                        ${pnl>=0?'+':''}${pnl.toFixed(2)} USDT
+                    </td>
+                    <td><span class="badge badge-${t.result}">${t.result==='win'?'✅ Win':'❌ Loss'}</span></td>
                 `;
                 tbody.appendChild(row);
             });
@@ -346,12 +310,10 @@ HTML = """
             try {
                 const r = await fetch('/api/all');
                 const d = await r.json();
+                const s1 = updateBot(d.bot1, 'b1');
+                const s2 = updateBot(d.bot2, 'b2');
+                const s3 = updateBot(d.bot3, 'b3');
 
-                const s1 = updateBot(d.bot1, 'b1', '#58a6ff');
-                const s2 = updateBot(d.bot2, 'b2', '#3fb950');
-                const s3 = updateBot(d.bot3, 'b3', '#d29922');
-
-                // Форекс сессия
                 const hour = new Date().getUTCHours();
                 const day = new Date().getUTCDay();
                 const sessionOn = day >= 1 && day <= 5 && (hour >= 8 && hour < 22);
@@ -359,7 +321,6 @@ HTML = """
                 sesEl.textContent = sessionOn ? '🟢 Сессия активна' : '🔴 Сессия закрыта';
                 sesEl.className = sessionOn ? 'session-on' : 'session-off';
 
-                // Лидеры
                 const bots = [
                     {name:'🔵 Бот 1', bal:s1.balance, wr:s1.wr},
                     {name:'🟢 Бот 2', bal:s2.balance, wr:s2.wr},
@@ -371,7 +332,6 @@ HTML = """
                 document.getElementById('leader-wr').textContent = leaderWR.name + ' (' + leaderWR.wr + '%)';
                 document.getElementById('total-trades').textContent = s1.total + s2.total + s3.total;
 
-                // Equity
                 const v1 = buildEquity(d.bot1.trades);
                 const v2 = buildEquity(d.bot2.trades);
                 const v3 = buildEquity(d.bot3.trades);
@@ -383,12 +343,10 @@ HTML = """
                 equityChart.data.datasets[2].data = v3;
                 equityChart.update();
 
-                // Bar
                 barChart.data.datasets[0].data = [d.bot1.wins, d.bot2.wins, d.bot3.wins];
                 barChart.data.datasets[1].data = [d.bot1.losses, d.bot2.losses, d.bot3.losses];
                 barChart.update();
 
-                // Таблицы
                 renderTrades(d.bot1.trades, 'b1-trades', 'b1-empty');
                 renderTrades(d.bot2.trades, 'b2-trades', 'b2-empty');
                 renderTrades(d.bot3.trades, 'b3-trades', 'b3-empty');
