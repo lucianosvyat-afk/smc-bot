@@ -1,18 +1,26 @@
 import ccxt, pandas as pd, numpy as np, time, requests, json, os
 from datetime import datetime
+from database import load_state, save_state, save_trade
 
 FOREX_PAIRS = [
-    "EUR/USDT:USDT",
-    "GBP/USDT:USDT",
-    "AUD/USDT:USDT",
+    "EUR/USDT:USDT",   # Евро
+    "GBP/USDT:USDT",   # Фунт
+    "AUD/USDT:USDT",   # Австралийский доллар
+    "JPY/USDT:USDT",   # Японская йена
+    "CAD/USDT:USDT",   # Канадский доллар
+    "CHF/USDT:USDT",   # Швейцарский франк
+    "NZD/USDT:USDT",   # Новозеландский доллар
+    "MXN/USDT:USDT",   # Мексиканское песо
+    "BRL/USDT:USDT",   # Бразильский реал
+    "TRY/USDT:USDT",   # Турецкая лира
 ]
 
+# ── Быстрые таймфреймы для форекса ────────────────
 LTF="5m"; MTF="15m"; HTF="1h"
 LEVERAGE=10; RISK_PERCENT=0.5
 START_BALANCE=1000.0; SWING_LOOKBACK=5
 MAX_DAILY_TRADES=2; DAILY_STOP_LOSS=2.0
 TP1_RR=1.5; TP2_RR=3.0
-LOG_FILE3="paper_trades_bot3.json"
 
 TELEGRAM_TOKEN=""
 TELEGRAM_CHAT_ID=""
@@ -40,7 +48,7 @@ def swings(df,n=5):
     df["sl"]=df["low"].where(df["low"]==df["low"].rolling(n*2+1,center=True).min())
     return df
 
-def detect_accumulation(df, lookback=20, threshold=0.03):
+def detect_accumulation(df, lookback=10, threshold=0.02):
     recent=df.tail(lookback)
     high=recent["high"].max()
     low=recent["low"].min()
@@ -79,7 +87,9 @@ def is_forex_session():
     if day>=5: return False
     london=(8<=hour<17)
     newyork=(13<=hour<22)
-    return london or newyork
+    tokyo=(0<=hour<9)
+    sydney=(21<=hour<24) or (0<=hour<7)
+    return london or newyork or tokyo or sydney
 
 def get_signal3(ex, symbol):
     try:
@@ -91,7 +101,7 @@ def get_signal3(ex, symbol):
         df_ltf=fetch(ex,symbol,LTF,100)
         price=df_ltf["close"].iloc[-1]
 
-        accum=detect_accumulation(df_htf,lookback=20,threshold=0.04)
+        accum=detect_accumulation(df_htf,lookback=10,threshold=0.02)
         if not accum["is_accumulation"]:
             return None, "Нет аккумуляции"
 
@@ -130,32 +140,20 @@ def get_signal3(ex, symbol):
 
 class Trader3:
     def __init__(self):
-        self.bal=START_BALANCE; self.pos=None
-        self.wins=0; self.losses=0; self.trades=[]
-        self.daily_trades=0; self.daily_loss=0.0
+        state=load_state("bot3", START_BALANCE)
+        self.bal=state["balance"]
+        self.wins=state["wins"]
+        self.losses=state["losses"]
+        self.trades=state["trades"]
+        self.daily_trades=state["daily_trades"]
+        self.daily_loss=state["daily_loss"]
+        self.pos=state["position"]
         self.last_day=datetime.now().date()
-        self._load()
-
-    def _load(self):
-        if os.path.exists(LOG_FILE3):
-            with open(LOG_FILE3) as f:
-                d=json.load(f)
-                self.bal=d.get("balance",START_BALANCE)
-                self.wins=d.get("wins",0)
-                self.losses=d.get("losses",0)
-                self.trades=d.get("trades",[])
-                self.daily_trades=d.get("daily_trades",0)
-                self.daily_loss=d.get("daily_loss",0.0)
-            print(f"[БОТ3] Загружено | Баланс: {self.bal:.2f} USDT")
+        print(f"[БОТ3] Загружено | Баланс: {self.bal:.2f} USDT | Сделок: {len(self.trades)}")
 
     def save(self):
-        with open(LOG_FILE3,"w") as f:
-            json.dump({
-                "balance":self.bal,"wins":self.wins,
-                "losses":self.losses,"trades":self.trades[-50:],
-                "daily_trades":self.daily_trades,
-                "daily_loss":self.daily_loss,"position":self.pos
-            },f,indent=2)
+        save_state("bot3", self.bal, self.wins, self.losses,
+                   self.daily_trades, self.daily_loss, self.pos)
 
     def reset_daily(self):
         today=datetime.now().date()
@@ -224,7 +222,7 @@ class Trader3:
             if pnl<0: self.daily_loss+=abs(pnl)
             if hit_tp2: self.wins+=1
             else: self.losses+=1
-            self.trades.append({
+            trade={
                 "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "symbol": symbol, "side": s,
                 "entry": entry, "exit": ep,
@@ -233,7 +231,8 @@ class Trader3:
                 "pnl": round(pnl,2),
                 "result": "win" if hit_tp2 else "loss",
                 "strategy": self.pos.get("strategy","Forex:Accum→FVG")
-            })
+            }
+            save_trade(trade, "bot3")
             msg=(f"{'✅ ТЕЙК' if hit_tp2 else '❌ СТОП'}\n"
                  f"{symbol} | Выход: {ep:.5f}\n"
                  f"PnL: {pnl:+.2f} USDT\n"
@@ -253,14 +252,16 @@ class Trader3:
         print(f"[БОТ3] 💰 Баланс: {self.bal:.2f} USDT ({profit:+.2f})")
         print(f"[БОТ3] 📊 Позиция: {'Нет' if not self.pos else self.pos['side'].upper()}")
         print(f"[БОТ3] 🏆 {self.wins}W/{self.losses}L | WR: {wr:.1f}%")
+        print(f"[БОТ3] Пары: {len(FOREX_PAIRS)} пар")
         print(f"[БОТ3] {'─'*40}")
 
 def run_bot3(ex):
     trader3=Trader3()
     scan=0
     print("\n[БОТ3] 🚀 Форекс бот запущен!")
-    print(f"[БОТ3] Пары: {FOREX_PAIRS}")
-    print(f"[БОТ3] Сессии: Лондон (08-17 UTC) + Нью-Йорк (13-22 UTC)")
+    print(f"[БОТ3] Пары ({len(FOREX_PAIRS)}): {[p.replace('/USDT:USDT','') for p in FOREX_PAIRS]}")
+    print(f"[БОТ3] Таймфреймы: HTF={HTF} MTF={MTF} LTF={LTF}")
+    print(f"[БОТ3] Сессии: Токио + Лондон + Нью-Йорк + Сидней")
 
     while True:
         try:
@@ -268,22 +269,23 @@ def run_bot3(ex):
             if not is_forex_session():
                 if scan%10==0:
                     print(f"[БОТ3] 🔴 Форекс закрыт — жду сессии...")
-                time.sleep(300)
+                time.sleep(60)
                 continue
 
             for symbol in FOREX_PAIRS:
                 try:
                     price=get_price(ex,symbol)
                     name=symbol.replace("/USDT:USDT","")
-                    print(f"\n[БОТ3] [{datetime.now().strftime('%H:%M:%S')}] {name}: {price:.5f}")
+                    print(f"[БОТ3] {name}: {price:.5f}")
                     trader3.check(price,symbol)
                     if trader3.pos and trader3.pos.get("symbol")==symbol:
                         print(f"[БОТ3] ⏳ {trader3.pos['side'].upper()} @ {trader3.pos['entry']:.5f} | SL:{trader3.pos['sl']:.5f} | TP2:{trader3.pos['tp2']:.5f}")
                     else:
                         sig,reason=get_signal3(ex,symbol)
-                        print(f"[БОТ3] {name}: {reason}")
-                        if sig and not trader3.pos:
-                            trader3.open(sig)
+                        if sig:
+                            print(f"[БОТ3] {name}: {reason}")
+                            if not trader3.pos:
+                                trader3.open(sig)
                 except Exception as e:
                     print(f"[БОТ3] Ошибка {symbol}: {e}")
                     continue
