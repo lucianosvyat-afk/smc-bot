@@ -1,4 +1,4 @@
-import ccxt, pandas as pd, numpy as np, time, requests, json, os
+import ccxt, pandas as pd, numpy as np, time, requests, os
 from datetime import datetime
 from database import load_state, save_state, save_trade
 
@@ -10,18 +10,14 @@ FOREX_PAIRS = [
     "CAD/USDT:USDT",   # Канадский доллар
     "CHF/USDT:USDT",   # Швейцарский франк
     "NZD/USDT:USDT",   # Новозеландский доллар
-    "MXN/USDT:USDT",   # Мексиканское песо
-    "BRL/USDT:USDT",   # Бразильский реал
-    "TRY/USDT:USDT",   # Турецкая лира
     "XAU/USDT:USDT",   # Золото
     "XAG/USDT:USDT",   # Серебро
 ]
 
-# ── Быстрые таймфреймы для форекса ────────────────
 LTF="5m"; MTF="15m"; HTF="1h"
 LEVERAGE=10; RISK_PERCENT=0.5
 START_BALANCE=1000.0; SWING_LOOKBACK=5
-MAX_DAILY_TRADES=2; DAILY_STOP_LOSS=2.0
+MAX_DAILY_TRADES=3; DAILY_STOP_LOSS=2.0
 TP1_RR=1.5; TP2_RR=3.0
 
 TELEGRAM_TOKEN=""
@@ -50,38 +46,96 @@ def swings(df,n=5):
     df["sl"]=df["low"].where(df["low"]==df["low"].rolling(n*2+1,center=True).min())
     return df
 
-def detect_accumulation(df, lookback=10, threshold=0.02):
-    recent=df.tail(lookback)
-    high=recent["high"].max()
-    low=recent["low"].min()
-    range_pct=(high-low)/low
-    return {
-        "is_accumulation": range_pct<threshold,
-        "range_high": high,
-        "range_low": low,
-        "range_pct": range_pct,
-        "mid": (high+low)/2
-    }
-
-def detect_manipulation(df_mtf, accum):
-    if not accum["is_accumulation"]: return None
-    last=df_mtf.iloc[-1]
-    bull=(last["low"]<accum["range_low"] and last["close"]>accum["range_low"])
-    bear=(last["high"]>accum["range_high"] and last["close"]<accum["range_high"])
-    if bull: return {"type":"bullish","sweep":accum["range_low"]}
-    if bear: return {"type":"bearish","sweep":accum["range_high"]}
+def detect_bos(df):
+    """BOS — определяем тренд"""
+    df=swings(df, SWING_LOOKBACK)
+    h=df["sh"].dropna(); l=df["sl"].dropna()
+    if len(h)<2 or len(l)<2: return None
+    c=df["close"].iloc[-1]
+    if c>h.iloc[-2] and l.iloc[-1]>l.iloc[-2]: return "bullish"
+    if c<l.iloc[-2] and h.iloc[-1]<h.iloc[-2]: return "bearish"
     return None
 
-def find_fvg(df, manip_type, lookback=15):
+def find_fvg(df, trend, lookback=20):
+    """Ищем FVG в направлении тренда"""
     recent=df.tail(lookback)
     fvgs=[]
     for i in range(1,len(recent)-1):
         p=recent.iloc[i-1]; n=recent.iloc[i+1]
-        if manip_type=="bullish" and p["high"]<n["low"]:
-            fvgs.append({"type":"bullish","top":n["low"],"bot":p["high"],"mid":(n["low"]+p["high"])/2})
-        if manip_type=="bearish" and p["low"]>n["high"]:
-            fvgs.append({"type":"bearish","top":p["low"],"bot":n["high"],"mid":(p["low"]+n["high"])/2})
+        if trend=="bullish" and p["high"]<n["low"]:
+            fvgs.append({
+                "type":"bullish",
+                "top":n["low"],
+                "bot":p["high"],
+                "mid":(n["low"]+p["high"])/2
+            })
+        if trend=="bearish" and p["low"]>n["high"]:
+            fvgs.append({
+                "type":"bearish",
+                "top":p["low"],
+                "bot":n["high"],
+                "mid":(p["low"]+n["high"])/2
+            })
+    # Возвращаем самый свежий FVG
     return fvgs[-1] if fvgs else None
+
+def get_signal3(ex, symbol):
+    try:
+        if not is_forex_session():
+            return None, "Не торговая сессия"
+
+        # Шаг 1: HTF тренд (1h)
+        df_htf=fetch(ex,symbol,HTF,100)
+        htf_trend=detect_bos(df_htf)
+        if not htf_trend:
+            return None, "Нет HTF тренда"
+
+        # Шаг 2: MTF подтверждение (15m)
+        df_mtf=fetch(ex,symbol,MTF,100)
+        mtf_trend=detect_bos(df_mtf)
+
+        # MTF должен совпадать с HTF или быть нейтральным
+        if mtf_trend and mtf_trend != htf_trend:
+            return None, f"MTF против HTF тренда"
+
+        # Шаг 3: FVG на LTF (5m)
+        df_ltf=fetch(ex,symbol,LTF,100)
+        price=df_ltf["close"].iloc[-1]
+        fvg=find_fvg(df_ltf, htf_trend, lookback=30)
+
+        if not fvg:
+            return None, "Нет FVG"
+
+        # Шаг 4: Цена в FVG?
+        if not (fvg["bot"]<=price<=fvg["top"]):
+            return None, f"Цена не в FVG ({fvg['bot']:.5f}-{fvg['top']:.5f})"
+
+        # Генерируем сигнал
+        df_swings=swings(df_ltf, SWING_LOOKBACK)
+        highs=df_swings["sh"].dropna()
+        lows=df_swings["sl"].dropna()
+
+        if htf_trend=="bullish":
+            sl=lows.iloc[-1]*0.999 if not lows.empty else fvg["bot"]*0.999
+            tp1=price+(price-sl)*TP1_RR
+            tp2=price+(price-sl)*TP2_RR
+            return {
+                "side":"buy","entry":price,"sl":sl,
+                "tp1":tp1,"tp2":tp2,"symbol":symbol,
+                "qty_closed":False,"strategy":"Forex:BOS+FVG"
+            }, f"✅ ЛОНГ! HTF:{htf_trend}"
+        else:
+            sl=highs.iloc[-1]*1.001 if not highs.empty else fvg["top"]*1.001
+            tp1=price-(sl-price)*TP1_RR
+            tp2=price-(sl-price)*TP2_RR
+            return {
+                "side":"sell","entry":price,"sl":sl,
+                "tp1":tp1,"tp2":tp2,"symbol":symbol,
+                "qty_closed":False,"strategy":"Forex:BOS+FVG"
+            }, f"✅ ШОРТ! HTF:{htf_trend}"
+
+    except Exception as e:
+        return None, f"Ошибка: {e}"
 
 def is_forex_session():
     hour=datetime.utcnow().hour
@@ -92,53 +146,6 @@ def is_forex_session():
     tokyo=(0<=hour<9)
     sydney=(21<=hour<24) or (0<=hour<7)
     return london or newyork or tokyo or sydney
-
-def get_signal3(ex, symbol):
-    try:
-        if not is_forex_session():
-            return None, "Не торговая сессия"
-
-        df_htf=fetch(ex,symbol,HTF,100)
-        df_mtf=fetch(ex,symbol,MTF,100)
-        df_ltf=fetch(ex,symbol,LTF,100)
-        price=df_ltf["close"].iloc[-1]
-
-        accum=detect_accumulation(df_htf,lookback=10,threshold=0.02)
-        if not accum["is_accumulation"]:
-            return None, "Нет аккумуляции"
-
-        manip=detect_manipulation(df_mtf,accum)
-        if not manip:
-            return None, "Нет манипуляции"
-
-        fvg=find_fvg(df_ltf,manip["type"])
-        if not fvg:
-            return None, "Нет FVG"
-
-        if not (fvg["bot"]<=price<=fvg["top"]):
-            return None, "Цена не в FVG"
-
-        if manip["type"]=="bullish":
-            sl=accum["range_low"]*0.999
-            tp1=price+(price-sl)*TP1_RR
-            tp2=price+(price-sl)*TP2_RR
-            return {
-                "side":"buy","entry":price,"sl":sl,
-                "tp1":tp1,"tp2":tp2,"symbol":symbol,
-                "qty_closed":False,"strategy":"Forex:Accum→FVG"
-            }, "✅ Сигнал ЛОНГ!"
-        else:
-            sl=accum["range_high"]*1.001
-            tp1=price-(sl-price)*TP1_RR
-            tp2=price-(sl-price)*TP2_RR
-            return {
-                "side":"sell","entry":price,"sl":sl,
-                "tp1":tp1,"tp2":tp2,"symbol":symbol,
-                "qty_closed":False,"strategy":"Forex:Accum→FVG"
-            }, "✅ Сигнал ШОРТ!"
-
-    except Exception as e:
-        return None, f"Ошибка: {e}"
 
 class Trader3:
     def __init__(self):
@@ -232,7 +239,7 @@ class Trader3:
                 "tp1": tp1, "tp2": tp2,
                 "pnl": round(pnl,2),
                 "result": "win" if hit_tp2 else "loss",
-                "strategy": self.pos.get("strategy","Forex:Accum→FVG")
+                "strategy": self.pos.get("strategy","Forex:BOS+FVG")
             }
             save_trade(trade, "bot3")
             msg=(f"{'✅ ТЕЙК' if hit_tp2 else '❌ СТОП'}\n"
@@ -250,26 +257,25 @@ class Trader3:
         profit=self.bal-START_BALANCE
         session="🟢 Активная" if is_forex_session() else "🔴 Закрыта"
         print(f"\n[БОТ3] {'─'*40}")
-        print(f"[БОТ3] 💱 ФОРЕКС | Сессия: {session}")
+        print(f"[БОТ3] 💱 ФОРЕКС BOS+FVG | Сессия: {session}")
         print(f"[БОТ3] 💰 Баланс: {self.bal:.2f} USDT ({profit:+.2f})")
         print(f"[БОТ3] 📊 Позиция: {'Нет' if not self.pos else self.pos['side'].upper()}")
         print(f"[БОТ3] 🏆 {self.wins}W/{self.losses}L | WR: {wr:.1f}%")
-        print(f"[БОТ3] Пары: {len(FOREX_PAIRS)} пар")
+        print(f"[БОТ3] Пары: {len(FOREX_PAIRS)}")
         print(f"[БОТ3] {'─'*40}")
 
 def run_bot3(ex):
     trader3=Trader3()
     scan=0
-    print("\n[БОТ3] 🚀 Форекс бот запущен!")
-    print(f"[БОТ3] Пары ({len(FOREX_PAIRS)}): {[p.replace('/USDT:USDT','') for p in FOREX_PAIRS]}")
-    print(f"[БОТ3] Таймфреймы: HTF={HTF} MTF={MTF} LTF={LTF}")
-    print(f"[БОТ3] Сессии: Токио + Лондон + Нью-Йорк + Сидней")
+    print("\n[БОТ3] 🚀 Форекс бот запущен! Стратегия: BOS+FVG")
+    print(f"[БОТ3] Пары: {[p.replace('/USDT:USDT','') for p in FOREX_PAIRS]}")
+    print(f"[БОТ3] HTF:{HTF} MTF:{MTF} LTF:{LTF}")
 
     while True:
         try:
             scan+=1
             if not is_forex_session():
-                if scan%10==0:
+                if scan%5==0:
                     print(f"[БОТ3] 🔴 Форекс закрыт — жду сессии...")
                 time.sleep(60)
                 continue
@@ -278,16 +284,14 @@ def run_bot3(ex):
                 try:
                     price=get_price(ex,symbol)
                     name=symbol.replace("/USDT:USDT","")
-                    print(f"[БОТ3] {name}: {price:.5f}")
                     trader3.check(price,symbol)
                     if trader3.pos and trader3.pos.get("symbol")==symbol:
-                        print(f"[БОТ3] ⏳ {trader3.pos['side'].upper()} @ {trader3.pos['entry']:.5f} | SL:{trader3.pos['sl']:.5f} | TP2:{trader3.pos['tp2']:.5f}")
+                        print(f"[БОТ3] ⏳ {name}: {trader3.pos['side'].upper()} @ {trader3.pos['entry']:.5f}")
                     else:
                         sig,reason=get_signal3(ex,symbol)
-                        if sig:
-                            print(f"[БОТ3] {name}: {reason}")
-                            if not trader3.pos:
-                                trader3.open(sig)
+                        print(f"[БОТ3] {name}: {reason}")
+                        if sig and not trader3.pos:
+                            trader3.open(sig)
                 except Exception as e:
                     print(f"[БОТ3] Ошибка {symbol}: {e}")
                     continue
