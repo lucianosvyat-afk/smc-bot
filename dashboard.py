@@ -283,6 +283,24 @@ HTML = """
                 borderVisible: false, wickUpColor: '#3fb950', wickDownColor: '#f85149',
             });
 
+            // Подбираем точность отображения цены под масштаб актива — иначе
+            // альткоины/форекс-пары вроде 0.10933 округляются до "0.11"/"0.08"
+            // и линии Вход/SL/TP визуально сливаются друг с другом.
+            function pickPrecision(price) {
+                const p = Math.abs(price);
+                if (p >= 100) return 2;
+                if (p >= 1) return 4;
+                if (p >= 0.01) return 5;
+                return 8;
+            }
+            // "2026-07-15 13:37" (наивное локальное время сервера, обычно UTC) -> unix-секунды
+            function parseServerTime(str) {
+                if (!str) return null;
+                const iso = str.replace(' ', 'T') + ':00Z';
+                const ms = Date.parse(iso);
+                return isNaN(ms) ? null : Math.floor(ms/1000);
+            }
+
             try {
                 const resp = await fetch(`/api/candles?symbol=${encodeURIComponent(t.symbol)}&tf=${t._tf}&anchor=${encodeURIComponent(t.time||'')}`);
                 const data = await resp.json();
@@ -294,28 +312,45 @@ HTML = """
 
                 const entry = parseFloat(t.entry||0), sl = parseFloat(t.sl||0);
                 const tp1 = parseFloat(t.tp1||0), tp2 = parseFloat(t.tp2||0);
-                if (entry) series.createPriceLine({ price: entry, color: '#58a6ff', lineWidth: 1, lineStyle: 2, title: 'Вход' });
-                if (sl) series.createPriceLine({ price: sl, color: '#f85149', lineWidth: 1, lineStyle: 2, title: 'SL' });
-                if (tp1) series.createPriceLine({ price: tp1, color: '#d29922', lineWidth: 1, lineStyle: 2, title: 'TP1' });
-                if (tp2) series.createPriceLine({ price: tp2, color: '#3fb950', lineWidth: 1, lineStyle: 2, title: 'TP2' });
+                const prec = pickPrecision(entry || sl || tp2 || data.candles[data.candles.length-1].close);
+                series.applyOptions({ priceFormat: { type: 'price', precision: prec, minMove: Math.pow(10, -prec) } });
+
+                if (entry) series.createPriceLine({ price: entry, color: '#58a6ff', lineWidth: 1, lineStyle: 2, title: 'Вход ' + entry.toFixed(prec) });
+                if (sl) series.createPriceLine({ price: sl, color: '#f85149', lineWidth: 1, lineStyle: 2, title: 'SL ' + sl.toFixed(prec) });
+                if (tp1) series.createPriceLine({ price: tp1, color: '#d29922', lineWidth: 1, lineStyle: 2, title: 'TP1 ' + tp1.toFixed(prec) });
+                if (tp2) series.createPriceLine({ price: tp2, color: '#3fb950', lineWidth: 1, lineStyle: 2, title: 'TP2 ' + tp2.toFixed(prec) });
 
                 const markers = [];
+                // Точка входа: используем реальное время открытия (opened_at),
+                // если бот его записал; иначе — начало показанного окна свечей
+                // (точное время открытия для старых сделок не сохранялось).
+                if (entry) {
+                    const entryTs = parseServerTime(t.opened_at) || data.candles[0].time;
+                    markers.push({
+                        time: entryTs,
+                        position: t.side==='buy' ? 'belowBar' : 'aboveBar',
+                        color: '#58a6ff',
+                        shape: t.side==='buy' ? 'arrowUp' : 'arrowDown',
+                        text: (t.opened_at ? '' : '~') + 'Вход ' + entry.toFixed(prec),
+                    });
+                }
                 if (t.result && t.result !== 'open' && t.exit) {
-                    const exitTs = data.exit_time || (data.candles[data.candles.length-1].time);
+                    const exitTs = parseServerTime(t.time) || data.exit_time || (data.candles[data.candles.length-1].time);
                     markers.push({
                         time: exitTs,
                         position: t.side==='buy' ? 'aboveBar' : 'belowBar',
                         color: t.result==='win' ? '#3fb950' : '#f85149',
                         shape: t.result==='win' ? 'arrowUp' : 'arrowDown',
-                        text: (t.result==='win'?'✅ ':'❌ ') + parseFloat(t.exit).toFixed(4),
+                        text: (t.result==='win'?'✅ ':'❌ ') + parseFloat(t.exit).toFixed(prec),
                     });
                 }
+                markers.sort((a,b) => a.time - b.time);
                 series.setMarkers(markers);
                 chart.timeScale().fitContent();
 
                 status.textContent = t.result === 'open'
-                    ? `⏳ Открыта${t.opened_at ? ' с ' + t.opened_at : ''} | Вход ${entry.toFixed(4)}`
-                    : `PnL: ${parseFloat(t.pnl||0)>=0?'+':''}${parseFloat(t.pnl||0).toFixed(2)} USDT | ${t.time||''}`;
+                    ? `⏳ Открыта${t.opened_at ? ' с ' + t.opened_at : ''} | Вход ${entry.toFixed(prec)}`
+                    : `PnL: ${parseFloat(t.pnl||0)>=0?'+':''}${parseFloat(t.pnl||0).toFixed(2)} USDT | ${t.time||''}${!t.opened_at ? ' · точка входа примерная (время открытия не сохранено для этой сделки)' : ''}`;
             } catch(e) {
                 status.textContent = '⚠️ Ошибка загрузки графика: ' + e;
             }
