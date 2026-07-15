@@ -2,17 +2,43 @@ import ccxt, pandas as pd, numpy as np, time, requests, os
 from datetime import datetime
 from database import load_state, save_state, save_trade
 
-FOREX_PAIRS = [
-    "EUR/USDT:USDT",   # Евро
-    "GBP/USDT:USDT",   # Фунт
-    "AUD/USDT:USDT",   # Австралийский доллар
-    "JPY/USDT:USDT",   # Японская йена
-    "CAD/USDT:USDT",   # Канадский доллар
-    "CHF/USDT:USDT",   # Швейцарский франк
-    "NZD/USDT:USDT",   # Новозеландский доллар
+# ВАЖНО: у OKX физически нет валютных своп-пар (EUR/GBP/AUD/JPY/CAD/CHF/NZD) —
+# только крипто и XAU/XAG (золото/серебро). Поэтому для реальных валют бот
+# подключается ко второй бирже — BitMEX, где с апреля 2026 есть настоящие
+# FX-перпетуалы. Точные названия символов в ccxt узнаём динамически при
+# старте (resolve_fx_symbol), т.к. это новый продукт биржи и формат мог не
+# совпасть с ожиданиями — детали смотри в логах "[БОТ3] Форекс-пара...".
+FX_MAJOR_PAIRS = [
+    ("EUR", "USD"),   # Евро
+    ("GBP", "USD"),   # Фунт
+    ("AUD", "USD"),   # Австралийский доллар
+    ("USD", "JPY"),   # Японская йена
+    ("USD", "CHF"),   # Швейцарский франк
+    ("USD", "CAD"),   # Канадский доллар
+    # NZD/USD на BitMEX и OKX не найден — новозеландский доллар недоступен
+]
+
+# Золото/серебро остаются на OKX — там они реально существуют и уже работали
+METAL_PAIRS = [
     "XAU/USDT:USDT",   # Золото
     "XAG/USDT:USDT",   # Серебро
 ]
+
+def resolve_fx_symbol(ex, cur_a, cur_b):
+    """Ищем реальный unified-символ валютной пары в маркетах биржи (ccxt может
+    называть его в любом порядке/формате — проверяем несколько вариантов, а
+    затем ищем по вхождению обеих валют среди своп-рынков."""
+    candidates = [
+        f"{cur_a}/{cur_b}:{cur_b}", f"{cur_a}/{cur_b}:{cur_a}", f"{cur_a}/{cur_b}",
+        f"{cur_b}/{cur_a}:{cur_a}", f"{cur_b}/{cur_a}:{cur_b}", f"{cur_b}/{cur_a}",
+    ]
+    for c in candidates:
+        if c in ex.markets:
+            return c
+    for sym, m in ex.markets.items():
+        if cur_a in sym and cur_b in sym:
+            return sym
+    return None
 
 LTF="5m"; MTF="15m"; HTF="1h"
 LEVERAGE=10; RISK_PERCENT=0.5
@@ -264,12 +290,44 @@ class Trader3:
         print(f"[БОТ3] Пары: {len(FOREX_PAIRS)}")
         print(f"[БОТ3] {'─'*40}")
 
+def build_pairs(ex_crypto):
+    """Собираем итоговый список торгуемых инструментов: реальный форекс на
+    BitMEX + золото/серебро на OKX. Возвращает список (exchange, symbol, имя)."""
+    pairs = []
+
+    ex_fx = None
+    try:
+        ex_fx = ccxt.bitmex()
+        ex_fx.load_markets()
+        print("[БОТ3] ✅ Подключено к BitMEX (для реального форекса)")
+    except Exception as e:
+        print(f"[БОТ3] ⚠️ Не удалось подключиться к BitMEX: {e} — форекс-пары пропущены, торгуем только золото/серебро")
+
+    if ex_fx:
+        for a, b in FX_MAJOR_PAIRS:
+            sym = resolve_fx_symbol(ex_fx, a, b)
+            if sym:
+                pairs.append((ex_fx, sym, f"{a}/{b}"))
+                print(f"[БОТ3] Форекс-пара найдена: {a}/{b} → {sym}")
+            else:
+                print(f"[БОТ3] ⚠️ Пара {a}/{b} не найдена на BitMEX, пропускаю")
+
+    for m in METAL_PAIRS:
+        pairs.append((ex_crypto, m, m.replace("/USDT:USDT","")))
+
+    return pairs
+
 def run_bot3(ex):
     trader3=Trader3()
     scan=0
+    pairs=build_pairs(ex)
     print("\n[БОТ3] 🚀 Форекс бот запущен! Стратегия: BOS+FVG")
-    print(f"[БОТ3] Пары: {[p.replace('/USDT:USDT','') for p in FOREX_PAIRS]}")
+    print(f"[БОТ3] Итоговые пары: {[name for _,_,name in pairs]}")
     print(f"[БОТ3] HTF:{HTF} MTF:{MTF} LTF:{LTF}")
+
+    if not pairs:
+        print("[БОТ3] ⛔ Нет ни одной доступной пары — бот остановлен")
+        return
 
     while True:
         try:
@@ -280,20 +338,19 @@ def run_bot3(ex):
                 time.sleep(60)
                 continue
 
-            for symbol in FOREX_PAIRS:
+            for pair_ex, symbol, name in pairs:
                 try:
-                    price=get_price(ex,symbol)
-                    name=symbol.replace("/USDT:USDT","")
+                    price=get_price(pair_ex,symbol)
                     trader3.check(price,symbol)
                     if trader3.pos and trader3.pos.get("symbol")==symbol:
                         print(f"[БОТ3] ⏳ {name}: {trader3.pos['side'].upper()} @ {trader3.pos['entry']:.5f}")
                     else:
-                        sig,reason=get_signal3(ex,symbol)
+                        sig,reason=get_signal3(pair_ex,symbol)
                         print(f"[БОТ3] {name}: {reason}")
                         if sig and not trader3.pos:
                             trader3.open(sig)
                 except Exception as e:
-                    print(f"[БОТ3] Ошибка {symbol}: {e}")
+                    print(f"[БОТ3] Ошибка {name}: {e}")
                     continue
 
             if scan%5==0: trader3.status()
