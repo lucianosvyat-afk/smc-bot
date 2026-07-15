@@ -228,6 +228,31 @@ HTML = """
             });
         }
 
+        // Ссылка на TradingView для ручной проверки графика по сделке.
+        // Крипто-перпетуалы и золото/серебро торгуются на OKX — линкуем туда же.
+        // Валютные пары (Бот 3, BitMEX) линкуем на стандартный форекс-график OANDA,
+        // т.к. TradingView может не индексировать свежие BitMEX FX-перпетуалы.
+        const FX_MAJORS = [
+            ['EUR','USD','EURUSD'], ['GBP','USD','GBPUSD'], ['AUD','USD','AUDUSD'],
+            ['USD','JPY','USDJPY'], ['USD','CHF','USDCHF'], ['USD','CAD','USDCAD'],
+        ];
+        function tvSymbol(sym) {
+            if (!sym) return null;
+            const s = sym.toUpperCase();
+            if (s.includes('/USDT:USDT')) {
+                const base = s.split('/')[0];
+                return `OKX:${base}USDT.P`;
+            }
+            for (const [a,b,tv] of FX_MAJORS) {
+                if (s.includes(a) && s.includes(b)) return `OANDA:${tv}`;
+            }
+            return null;
+        }
+        function tvLink(sym) {
+            const tv = tvSymbol(sym);
+            return tv ? `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tv)}` : null;
+        }
+
         function updateBot(data, prefix) {
             const total = data.wins + data.losses;
             const wr = total > 0 ? (data.wins/total*100).toFixed(1) : 0;
@@ -246,7 +271,7 @@ HTML = """
                 const pos = data.position;
                 document.getElementById(prefix+'-pos').innerHTML =
                     `<b style="color:${pos.side==='buy'?'#58a6ff':'#d29922'}">${pos.side.toUpperCase()}</b>
-                     ${(pos.symbol||'').replace('/USDT:USDT','')}
+                     ${tvLink(pos.symbol) ? `<a href="${tvLink(pos.symbol)}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Открыть график на TradingView">${(pos.symbol||'').replace('/USDT:USDT','')} 📈</a>` : (pos.symbol||'').replace('/USDT:USDT','')}
                      @ <span style="color:#58a6ff">${parseFloat(pos.entry||0).toFixed(4)}</span>
                      | SL:<span style="color:#f85149"> ${parseFloat(pos.sl||0).toFixed(4)}</span>
                      | TP1:<span style="color:#d29922"> ${parseFloat(pos.tp1||0).toFixed(4)}</span>
@@ -274,7 +299,7 @@ HTML = """
                 const row = document.createElement('tr');
                 row.innerHTML = `
                     <td style="color:#8b949e;white-space:nowrap">${(t.time||'-').slice(11)}<br><span style="font-size:10px">${(t.time||'-').slice(0,10)}</span></td>
-                    <td style="font-weight:600">${(t.symbol||'-').replace('/USDT:USDT','')}</td>
+                    <td style="font-weight:600">${tvLink(t.symbol) ? `<a href="${tvLink(t.symbol)}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Открыть график на TradingView">${(t.symbol||'-').replace('/USDT:USDT','')} 📈</a>` : (t.symbol||'-').replace('/USDT:USDT','')}</td>
                     <td><span class="badge badge-${t.side}">${(t.side||'').toUpperCase()}</span></td>
                     <td>
                         <div class="price-entry">${entry.toFixed(4)}</div>
