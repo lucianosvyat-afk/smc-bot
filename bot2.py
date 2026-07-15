@@ -167,7 +167,7 @@ class Trader2:
         risk=self.bal*(RISK_PERCENT/100)
         sl_d=abs(sig["entry"]-sig["sl"])
         qty=(risk/sl_d)*LEVERAGE if sl_d>0 else 0
-        self.pos={**sig,"qty":qty}
+        self.pos={**sig,"qty":qty,"opened_at":datetime.now().strftime("%Y-%m-%d %H:%M")}
         self.daily_trades+=1
         self.save()
         msg=(f"{'📈' if sig['side']=='buy' else '📉'} {sig['side'].upper()}\n"
@@ -220,7 +220,8 @@ class Trader2:
                 "tp1": tp1, "tp2": tp2,
                 "pnl": round(pnl,2),
                 "result": "win" if hit_tp2 else "loss",
-                "strategy": self.pos.get("strategy","Accum→Manip→FVG")
+                "strategy": self.pos.get("strategy","Accum→Manip→FVG"),
+                "opened_at": self.pos.get("opened_at")
             }
             save_trade(trade, "bot2")
             msg=(f"{'✅ ТЕЙК' if hit_tp2 else '❌ СТОП'}\n"
