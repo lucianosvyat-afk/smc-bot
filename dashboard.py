@@ -1,5 +1,5 @@
-from flask import Flask, render_template_string, jsonify
-import json, os
+from flask import Flask, render_template_string, jsonify, request
+import json, os, ccxt
 from datetime import datetime
 
 app = Flask(__name__)
@@ -10,6 +10,7 @@ HTML = """
 <head>
     <title>SMC Trading Bots Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
     <style>
         * { margin:0; padding:0; box-sizing:border-box; }
         body { background:#0d1117; color:#e6edf3; font-family:'Segoe UI',sans-serif; }
@@ -62,6 +63,17 @@ HTML = """
         .price-sl { color:#f85149; font-size:10px; }
         .price-tp { color:#3fb950; font-size:10px; }
         .price-tp1 { color:#d29922; font-size:10px; }
+        .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:1000; align-items:center; justify-content:center; }
+        .modal-overlay.open { display:flex; }
+        .modal-box { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:20px; width:90%; max-width:900px; }
+        .modal-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+        .modal-title { font-size:15px; font-weight:700; color:#58a6ff; }
+        .modal-close { cursor:pointer; color:#8b949e; font-size:20px; background:none; border:none; }
+        .modal-close:hover { color:#e6edf3; }
+        .modal-legend { display:flex; gap:14px; flex-wrap:wrap; font-size:11px; color:#8b949e; margin-top:10px; }
+        .legend-dot { display:inline-block; width:10px; height:2px; margin-right:4px; vertical-align:middle; }
+        .modal-status { font-size:12px; color:#8b949e; margin-top:8px; }
+        .trade-link { color:inherit; text-decoration:underline dotted; cursor:pointer; background:none; border:none; font:inherit; padding:0; }
     </style>
 </head>
 <body>
@@ -228,29 +240,85 @@ HTML = """
             });
         }
 
-        // Ссылка на TradingView для ручной проверки графика по сделке.
-        // Крипто-перпетуалы и золото/серебро торгуются на OKX — линкуем туда же.
-        // Валютные пары (Бот 3, BitMEX) линкуем на стандартный форекс-график OANDA,
-        // т.к. TradingView может не индексировать свежие BitMEX FX-перпетуалы.
-        const FX_MAJORS = [
-            ['EUR','USD','EURUSD'], ['GBP','USD','GBPUSD'], ['AUD','USD','AUDUSD'],
-            ['USD','JPY','USDJPY'], ['USD','CHF','USDCHF'], ['USD','CAD','USDCAD'],
-        ];
-        function tvSymbol(sym) {
-            if (!sym) return null;
-            const s = sym.toUpperCase();
-            if (s.includes('/USDT:USDT')) {
-                const base = s.split('/')[0];
-                return `OKX:${base}USDT.P`;
-            }
-            for (const [a,b,tv] of FX_MAJORS) {
-                if (s.includes(a) && s.includes(b)) return `OANDA:${tv}`;
-            }
-            return null;
+        // Реестр сделок для модалки с графиком (id -> данные сделки)
+        const BOT_TF = {b1:'15m', b2:'15m', b3:'5m'};
+        const BOT_NAME = {b1:'Бот 1', b2:'Бот 2', b3:'Бот 3'};
+        let tradeRegistry = {};
+        let tradeRegistryCounter = 0;
+        function registerTrade(t, prefix) {
+            const id = 't' + (tradeRegistryCounter++);
+            tradeRegistry[id] = Object.assign({}, t, {_bot: BOT_NAME[prefix]||prefix, _tf: BOT_TF[prefix]||'15m'});
+            return id;
         }
-        function tvLink(sym) {
-            const tv = tvSymbol(sym);
-            return tv ? `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tv)}` : null;
+
+        let chartHandle = null;
+        function closeTradeChart() {
+            document.getElementById('chart-modal').classList.remove('open');
+            const c = document.getElementById('chart-container');
+            c.innerHTML = '';
+            chartHandle = null;
+        }
+
+        async function openTradeChart(id) {
+            const t = tradeRegistry[id];
+            if (!t) return;
+            const modal = document.getElementById('chart-modal');
+            const title = document.getElementById('chart-modal-title');
+            const status = document.getElementById('chart-modal-status');
+            const container = document.getElementById('chart-container');
+            container.innerHTML = '';
+            title.textContent = `${t._bot} · ${(t.symbol||'').replace('/USDT:USDT','')} · ${t.side==='buy'?'LONG':'SHORT'}`;
+            status.textContent = 'Загружаю свечи...';
+            modal.classList.add('open');
+
+            const chart = LightweightCharts.createChart(container, {
+                width: container.clientWidth, height: 420,
+                layout: { background: { color: '#161b22' }, textColor: '#8b949e' },
+                grid: { vertLines: { color: '#21262d' }, horzLines: { color: '#21262d' } },
+                timeScale: { timeVisible: true, secondsVisible: false },
+            });
+            chartHandle = chart;
+            const series = chart.addCandlestickSeries({
+                upColor: '#3fb950', downColor: '#f85149',
+                borderVisible: false, wickUpColor: '#3fb950', wickDownColor: '#f85149',
+            });
+
+            try {
+                const resp = await fetch(`/api/candles?symbol=${encodeURIComponent(t.symbol)}&tf=${t._tf}&anchor=${encodeURIComponent(t.time||'')}`);
+                const data = await resp.json();
+                if (data.error || !data.candles || !data.candles.length) {
+                    status.textContent = '⚠️ Не удалось загрузить свечи: ' + (data.error || 'нет данных');
+                    return;
+                }
+                series.setData(data.candles);
+
+                const entry = parseFloat(t.entry||0), sl = parseFloat(t.sl||0);
+                const tp1 = parseFloat(t.tp1||0), tp2 = parseFloat(t.tp2||0);
+                if (entry) series.createPriceLine({ price: entry, color: '#58a6ff', lineWidth: 1, lineStyle: 2, title: 'Вход' });
+                if (sl) series.createPriceLine({ price: sl, color: '#f85149', lineWidth: 1, lineStyle: 2, title: 'SL' });
+                if (tp1) series.createPriceLine({ price: tp1, color: '#d29922', lineWidth: 1, lineStyle: 2, title: 'TP1' });
+                if (tp2) series.createPriceLine({ price: tp2, color: '#3fb950', lineWidth: 1, lineStyle: 2, title: 'TP2' });
+
+                const markers = [];
+                if (t.result && t.result !== 'open' && t.exit) {
+                    const exitTs = data.exit_time || (data.candles[data.candles.length-1].time);
+                    markers.push({
+                        time: exitTs,
+                        position: t.side==='buy' ? 'aboveBar' : 'belowBar',
+                        color: t.result==='win' ? '#3fb950' : '#f85149',
+                        shape: t.result==='win' ? 'arrowUp' : 'arrowDown',
+                        text: (t.result==='win'?'✅ ':'❌ ') + parseFloat(t.exit).toFixed(4),
+                    });
+                }
+                series.setMarkers(markers);
+                chart.timeScale().fitContent();
+
+                status.textContent = t.result === 'open'
+                    ? `⏳ Открыта${t.opened_at ? ' с ' + t.opened_at : ''} | Вход ${entry.toFixed(4)}`
+                    : `PnL: ${parseFloat(t.pnl||0)>=0?'+':''}${parseFloat(t.pnl||0).toFixed(2)} USDT | ${t.time||''}`;
+            } catch(e) {
+                status.textContent = '⚠️ Ошибка загрузки графика: ' + e;
+            }
         }
 
         function updateBot(data, prefix) {
@@ -269,9 +337,10 @@ HTML = """
             document.getElementById(prefix+'-losses').textContent = data.losses;
             if (data.position) {
                 const pos = data.position;
+                const posId = registerTrade(Object.assign({}, pos, {result:'open'}), prefix);
                 document.getElementById(prefix+'-pos').innerHTML =
                     `<b style="color:${pos.side==='buy'?'#58a6ff':'#d29922'}">${pos.side.toUpperCase()}</b>
-                     ${tvLink(pos.symbol) ? `<a href="${tvLink(pos.symbol)}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Открыть график на TradingView">${(pos.symbol||'').replace('/USDT:USDT','')} 📈</a>` : (pos.symbol||'').replace('/USDT:USDT','')}
+                     <button class="trade-link" onclick="openTradeChart('${posId}')">${(pos.symbol||'').replace('/USDT:USDT','')} 📈</button>
                      @ <span style="color:#58a6ff">${parseFloat(pos.entry||0).toFixed(4)}</span>
                      | SL:<span style="color:#f85149"> ${parseFloat(pos.sl||0).toFixed(4)}</span>
                      | TP1:<span style="color:#d29922"> ${parseFloat(pos.tp1||0).toFixed(4)}</span>
@@ -282,7 +351,7 @@ HTML = """
             return { total, wr: parseFloat(wr), balance: data.balance };
         }
 
-        function renderTrades(trades, tbodyId, emptyId) {
+        function renderTrades(trades, tbodyId, emptyId, prefix) {
             const tbody = document.getElementById(tbodyId);
             const empty = document.getElementById(emptyId);
             tbody.innerHTML = '';
@@ -299,7 +368,7 @@ HTML = """
                 const row = document.createElement('tr');
                 row.innerHTML = `
                     <td style="color:#8b949e;white-space:nowrap">${(t.time||'-').slice(11)}<br><span style="font-size:10px">${(t.time||'-').slice(0,10)}</span></td>
-                    <td style="font-weight:600">${tvLink(t.symbol) ? `<a href="${tvLink(t.symbol)}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Открыть график на TradingView">${(t.symbol||'-').replace('/USDT:USDT','')} 📈</a>` : (t.symbol||'-').replace('/USDT:USDT','')}</td>
+                    <td style="font-weight:600"><button class="trade-link" onclick="openTradeChart('${registerTrade(t, prefix)}')">${(t.symbol||'-').replace('/USDT:USDT','')} 📈</button></td>
                     <td><span class="badge badge-${t.side}">${(t.side||'').toUpperCase()}</span></td>
                     <td>
                         <div class="price-entry">${entry.toFixed(4)}</div>
@@ -372,9 +441,9 @@ HTML = """
                 barChart.data.datasets[1].data = [d.bot1.losses, d.bot2.losses, d.bot3.losses];
                 barChart.update();
 
-                renderTrades(d.bot1.trades, 'b1-trades', 'b1-empty');
-                renderTrades(d.bot2.trades, 'b2-trades', 'b2-empty');
-                renderTrades(d.bot3.trades, 'b3-trades', 'b3-empty');
+                renderTrades(d.bot1.trades, 'b1-trades', 'b1-empty', 'b1');
+                renderTrades(d.bot2.trades, 'b2-trades', 'b2-empty', 'b2');
+                renderTrades(d.bot3.trades, 'b3-trades', 'b3-empty', 'b3');
 
                 document.getElementById('lastUpdate').textContent = 'Обновлено: ' + new Date().toLocaleTimeString();
             } catch(e) { console.error(e); }
@@ -384,6 +453,22 @@ HTML = """
         update();
         setInterval(update, 10000);
     </script>
+<div class="modal-overlay" id="chart-modal">
+    <div class="modal-box">
+        <div class="modal-header">
+            <div class="modal-title" id="chart-modal-title">Сделка</div>
+            <button class="modal-close" onclick="closeTradeChart()">✕</button>
+        </div>
+        <div id="chart-container" style="height:420px"></div>
+        <div class="modal-legend">
+            <span><span class="legend-dot" style="background:#58a6ff"></span>Вход</span>
+            <span><span class="legend-dot" style="background:#f85149"></span>SL</span>
+            <span><span class="legend-dot" style="background:#d29922"></span>TP1</span>
+            <span><span class="legend-dot" style="background:#3fb950"></span>TP2</span>
+        </div>
+        <div class="modal-status" id="chart-modal-status"></div>
+    </div>
+</div>
 </body>
 </html>
 """
@@ -446,6 +531,52 @@ def api_data():
         except: pass
         return default
     return jsonify(load("paper_trades.json"))
+
+_ex_cache = {}
+def get_exchange(name):
+    """Ленивое кэшированное подключение к бирже только для чтения OHLCV
+    (без ключей). OKX — крипто-пары Бота1/2 и золото/серебро Бота3.
+    BitMEX — реальные форекс-пары Бота 3."""
+    if name not in _ex_cache:
+        if name == 'okx':
+            ex = ccxt.okx({"options": {"defaultType": "swap"}})
+        else:
+            ex = ccxt.bitmex()
+        ex.load_markets()
+        _ex_cache[name] = ex
+    return _ex_cache[name]
+
+TF_MS = {'1m':60000,'5m':300000,'15m':900000,'30m':1800000,'1h':3600000,'4h':14400000}
+
+@app.route('/api/candles')
+def api_candles():
+    symbol = request.args.get('symbol', '')
+    tf = request.args.get('tf', '15m')
+    anchor = request.args.get('anchor', '')
+    limit = 200
+    if not symbol:
+        return jsonify({"error": "no symbol"}), 400
+    try:
+        ex_name = 'okx' if '/USDT:USDT' in symbol else 'bitmex'
+        ex = get_exchange(ex_name)
+
+        since = None
+        exit_time = None
+        if anchor:
+            try:
+                anchor_dt = datetime.strptime(anchor, "%Y-%m-%d %H:%M")
+                anchor_ms = int(anchor_dt.timestamp() * 1000)
+                tf_ms = TF_MS.get(tf, 900000)
+                since = anchor_ms - int(limit * 0.6) * tf_ms
+                exit_time = int(anchor_dt.timestamp())
+            except Exception:
+                since = None
+
+        raw = ex.fetch_ohlcv(symbol, tf, since=since, limit=limit)
+        candles = [{"time": int(c[0] // 1000), "open": c[1], "high": c[2], "low": c[3], "close": c[4]} for c in raw]
+        return jsonify({"candles": candles, "exit_time": exit_time})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
