@@ -1,15 +1,13 @@
-import ccxt, pandas as pd, numpy as np, time, requests, json, os, threading
+import ccxt, pandas as pd, numpy as np, time, requests, os
 from datetime import datetime
-from bot2 import run_bot2
-from bot3_forex import run_bot3
-from database import load_state, save_state, save_trade, connect_db
+from database import load_state, save_state, save_trade
 
-LTF="15m"; HTF="1h"; MTF="4h"
-LEVERAGE=10; RISK_PERCENT=1.0
+LTF="15m"; MTF="1h"; HTF="4h"
+LEVERAGE=10; RISK_PERCENT=0.5
 START_BALANCE=1000.0; SWING_LOOKBACK=5
 TOP_PAIRS=5; UPDATE_PAIRS_EVERY=30
-MAX_DAILY_TRADES=3; DAILY_STOP_LOSS=3.0
-TP1_RR=1.0; TP2_RR=2.0
+MAX_DAILY_TRADES=2; DAILY_STOP_LOSS=2.0
+TP1_RR=1.5; TP2_RR=3.0
 
 TELEGRAM_TOKEN=""
 TELEGRAM_CHAT_ID=""
@@ -18,17 +16,10 @@ def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     try:
         url=f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url,data={"chat_id":TELEGRAM_CHAT_ID,"text":f"🤖 БОТ 1\n{msg}"},timeout=5)
+        requests.post(url,data={"chat_id":TELEGRAM_CHAT_ID,"text":f"🟢 БОТ 2\n{msg}"},timeout=5)
     except: pass
 
-def connect():
-    print("Подключаюсь к OKX...")
-    ex=ccxt.okx({"options":{"defaultType":"swap"}})
-    ex.load_markets()
-    print("Подключён!")
-    return ex
-
-def fetch(ex,sym,tf,limit=150):
+def fetch(ex,sym,tf,limit=200):
     raw=ex.fetch_ohlcv(sym,tf,limit=limit)
     df=pd.DataFrame(raw,columns=["ts","open","high","low","close","volume"])
     df["ts"]=pd.to_datetime(df["ts"],unit="ms")
@@ -50,14 +41,14 @@ def get_top_volatile(ex, top_n=5):
             pairs.append({"symbol":symbol,"volatility":volatility,"change":t["percentage"]})
         pairs.sort(key=lambda x: x["volatility"], reverse=True)
         top=pairs[:top_n]
-        print(f"  Найдено пар: {len(pairs)}, беру топ {top_n}")
+        print(f"[БОТ2]   Найдено пар: {len(pairs)}, беру топ {top_n}")
         for i,p in enumerate(top,1):
-            print(f"  {i}. {p['symbol']} | {p['change']:+.1f}%")
+            print(f"[БОТ2]   {i}. {p['symbol']} | {p['change']:+.1f}%")
         if not top:
             return ["BTC/USDT:USDT","ETH/USDT:USDT","SOL/USDT:USDT","BNB/USDT:USDT","XRP/USDT:USDT"]
         return [p["symbol"] for p in top]
     except Exception as e:
-        print(f"Ошибка получения пар: {e}")
+        print(f"[БОТ2] Ошибка получения пар: {e}")
         return ["BTC/USDT:USDT","ETH/USDT:USDT","SOL/USDT:USDT"]
 
 def swings(df,n=5):
@@ -66,53 +57,80 @@ def swings(df,n=5):
     df["sl"]=df["low"].where(df["low"]==df["low"].rolling(n*2+1,center=True).min())
     return df
 
-def get_avg_volume(df, period=20):
-    return df["volume"].rolling(period).mean().iloc[-1]
+def detect_accumulation(df, lookback=20, threshold=0.04):
+    recent=df.tail(lookback)
+    high=recent["high"].max()
+    low=recent["low"].min()
+    range_pct=(high-low)/low
+    return {
+        "is_accumulation": range_pct<threshold,
+        "range_high": high,
+        "range_low": low,
+        "range_pct": range_pct,
+        "mid": (high+low)/2
+    }
 
-def bos(df):
-    df=swings(df,SWING_LOOKBACK)
-    h=df["sh"].dropna(); l=df["sl"].dropna()
-    if len(h)<2 or len(l)<2: return None
-    c=df["close"].iloc[-1]
-    if c>h.iloc[-2] and l.iloc[-1]>l.iloc[-2]: return "bullish"
-    if c<l.iloc[-2] and h.iloc[-1]<h.iloc[-2]: return "bearish"
+def detect_manipulation(df_mtf, accum):
+    if not accum["is_accumulation"]: return None
+    last=df_mtf.iloc[-1]
+    bull=(last["low"]<accum["range_low"] and last["close"]>accum["range_low"])
+    bear=(last["high"]>accum["range_high"] and last["close"]<accum["range_high"])
+    if bull: return {"type":"bullish","sweep":accum["range_low"]}
+    if bear: return {"type":"bearish","sweep":accum["range_high"]}
     return None
 
-def signal(ex,symbol,trend,mtf_trend):
-    if mtf_trend and mtf_trend != trend: return None
-    df=fetch(ex,symbol,LTF,100)
-    price=df["close"].iloc[-1]
-    sp=swings(df,SWING_LOOKBACK)
-    h=sp["sh"].dropna(); l=sp["sl"].dropna()
-    if h.empty or l.empty: return None
-    d=h.iloc[-1]-l.iloc[-1]
-    if d==0: return None
-    if trend=="bullish":
-        ote_top=h.iloc[-1]-d*0.62; ote_bot=h.iloc[-1]-d*0.79
-    else:
-        ote_top=l.iloc[-1]+d*0.79; ote_bot=l.iloc[-1]+d*0.62
-    ote=ote_bot<=price<=ote_top
-    last=df.iloc[-1]; pprev=df.iloc[-3]
-    sfp_pattern=(trend=="bullish" and last["low"]<pprev["low"] and last["close"]>pprev["low"]) or \
-                (trend=="bearish" and last["high"]>pprev["high"] and last["close"]<pprev["high"])
-    avg_vol=get_avg_volume(df)
-    sfp=sfp_pattern and last["volume"]>=avg_vol*1.5
-    if ote or sfp:
-        if trend=="bullish":
-            sl=l.iloc[-1]*0.999
+def find_fvg(df, manip_type, lookback=15):
+    recent=df.tail(lookback)
+    fvgs=[]
+    for i in range(1,len(recent)-1):
+        p=recent.iloc[i-1]; n=recent.iloc[i+1]
+        if manip_type=="bullish" and p["high"]<n["low"]:
+            fvgs.append({"type":"bullish","top":n["low"],"bot":p["high"],"mid":(n["low"]+p["high"])/2})
+        if manip_type=="bearish" and p["low"]>n["high"]:
+            fvgs.append({"type":"bearish","top":p["low"],"bot":n["high"],"mid":(p["low"]+n["high"])/2})
+    return fvgs[-1] if fvgs else None
+
+def get_signal2(ex, symbol):
+    try:
+        df_htf=fetch(ex,symbol,HTF,100)
+        df_mtf=fetch(ex,symbol,MTF,100)
+        df_ltf=fetch(ex,symbol,LTF,100)
+        price=df_ltf["close"].iloc[-1]
+        accum=detect_accumulation(df_htf,lookback=20,threshold=0.04)
+        if not accum["is_accumulation"]:
+            return None, "Нет аккумуляции"
+        manip=detect_manipulation(df_mtf,accum)
+        if not manip:
+            return None, "Нет манипуляции"
+        fvg=find_fvg(df_ltf,manip["type"])
+        if not fvg:
+            return None, "Нет FVG"
+        if not (fvg["bot"]<=price<=fvg["top"]):
+            return None, "Цена не в FVG"
+        if manip["type"]=="bullish":
+            sl=accum["range_low"]*0.999
             tp1=price+(price-sl)*TP1_RR
             tp2=price+(price-sl)*TP2_RR
-            return {"side":"buy","entry":price,"sl":sl,"tp1":tp1,"tp2":tp2,"symbol":symbol,"qty_closed":False,"strategy":"BOS+OTE+SFP"}
+            return {
+                "side":"buy","entry":price,"sl":sl,
+                "tp1":tp1,"tp2":tp2,"symbol":symbol,
+                "qty_closed":False,"strategy":"Accum→Manip→FVG"
+            }, "✅ Сигнал ЛОНГ!"
         else:
-            sl=h.iloc[-1]*1.001
+            sl=accum["range_high"]*1.001
             tp1=price-(sl-price)*TP1_RR
             tp2=price-(sl-price)*TP2_RR
-            return {"side":"sell","entry":price,"sl":sl,"tp1":tp1,"tp2":tp2,"symbol":symbol,"qty_closed":False,"strategy":"BOS+OTE+SFP"}
-    return None
+            return {
+                "side":"sell","entry":price,"sl":sl,
+                "tp1":tp1,"tp2":tp2,"symbol":symbol,
+                "qty_closed":False,"strategy":"Accum→Manip→FVG"
+            }, "✅ Сигнал ШОРТ!"
+    except Exception as e:
+        return None, f"Ошибка: {e}"
 
-class Trader:
+class Trader2:
     def __init__(self):
-        state=load_state("bot1", START_BALANCE)
+        state=load_state("bot2", START_BALANCE)
         self.bal=state["balance"]
         self.wins=state["wins"]
         self.losses=state["losses"]
@@ -121,10 +139,10 @@ class Trader:
         self.daily_loss=state["daily_loss"]
         self.pos=state["position"]
         self.last_day=datetime.now().date()
-        print(f"[БОТ1] Загружено | Баланс: {self.bal:.2f} USDT | Сделок: {len(self.trades)}")
+        print(f"[БОТ2] Загружено | Баланс: {self.bal:.2f} USDT | Сделок: {len(self.trades)}")
 
     def save(self):
-        save_state("bot1", self.bal, self.wins, self.losses,
+        save_state("bot2", self.bal, self.wins, self.losses,
                    self.daily_trades, self.daily_loss, self.pos)
 
     def reset_daily(self):
@@ -132,14 +150,15 @@ class Trader:
         if today!=self.last_day:
             self.daily_trades=0; self.daily_loss=0.0
             self.last_day=today
+            print("[БОТ2] 📅 Новый день — сброс лимитов")
 
     def can_trade(self):
         self.reset_daily()
         if self.daily_trades>=MAX_DAILY_TRADES:
-            print(f"[БОТ1] ⛔ Лимит сделок за день")
+            print("[БОТ2] ⛔ Лимит сделок достигнут")
             return False
         if self.daily_loss>=self.bal*(DAILY_STOP_LOSS/100):
-            print(f"[БОТ1] ⛔ Дневной стоп-лосс достигнут")
+            print("[БОТ2] ⛔ Дневной стоп достигнут")
             return False
         return True
 
@@ -151,15 +170,15 @@ class Trader:
         self.pos={**sig,"qty":qty}
         self.daily_trades+=1
         self.save()
-        msg=(f"{'📈' if sig['side']=='buy' else '📉'} ПОЗИЦИЯ: {sig['side'].upper()}\n"
+        msg=(f"{'📈' if sig['side']=='buy' else '📉'} {sig['side'].upper()}\n"
              f"Пара: {sig['symbol']}\n"
              f"Стратегия: {sig.get('strategy','')}\n"
-             f"Вход: {sig['entry']:.4f}\n"
-             f"SL: {sig['sl']:.4f}\n"
-             f"TP1: {sig['tp1']:.4f}\n"
-             f"TP2: {sig['tp2']:.4f}\n"
+             f"Вход: {sig['entry']:.5f}\n"
+             f"SL: {sig['sl']:.5f}\n"
+             f"TP1: {sig['tp1']:.5f}\n"
+             f"TP2: {sig['tp2']:.5f}\n"
              f"Риск: {risk:.2f} USDT")
-        print(f"\n[БОТ1] {'='*40}\n{msg}\n{'='*40}")
+        print(f"\n[БОТ2] {'='*40}\n{msg}\n{'='*40}")
         send_telegram(msg)
 
     def check(self,price,symbol):
@@ -180,8 +199,8 @@ class Trader:
                 self.pos["sl"]=entry
                 self.pos["qty"]=qty/2
                 self.save()
-                msg=f"⚡ ЧАСТИЧНОЕ ЗАКРЫТИЕ 50%\n{symbol} | PnL: +{pnl_half:.2f} USDT\nБаланс: {self.bal:.2f}"
-                print(f"\n[БОТ1] {msg}")
+                msg=f"⚡ 50% закрыто\n{symbol}\nTP1: {tp1:.5f}\nPnL: +{pnl_half:.2f} USDT\nБаланс: {self.bal:.2f}"
+                print(f"\n[БОТ2] {msg}")
                 send_telegram(msg)
                 return
         hit_tp2=(s=="buy" and price>=tp2) or (s=="sell" and price<=tp2)
@@ -201,14 +220,14 @@ class Trader:
                 "tp1": tp1, "tp2": tp2,
                 "pnl": round(pnl,2),
                 "result": "win" if hit_tp2 else "loss",
-                "strategy": self.pos.get("strategy","BOS+OTE+SFP")
+                "strategy": self.pos.get("strategy","Accum→Manip→FVG")
             }
-            save_trade(trade, "bot1")
-            msg=(f"{'✅ ТЕЙК ПРОФИТ' if hit_tp2 else '❌ СТОП ЛОСС'}\n"
-                 f"{symbol} | Выход: {ep:.4f}\n"
+            save_trade(trade, "bot2")
+            msg=(f"{'✅ ТЕЙК' if hit_tp2 else '❌ СТОП'}\n"
+                 f"{symbol} | Выход: {ep:.5f}\n"
                  f"PnL: {pnl:+.2f} USDT\n"
-                 f"Баланс: {self.bal:.2f} USDT")
-            print(f"\n[БОТ1] {msg}")
+                 f"Баланс: {self.bal:.2f}")
+            print(f"\n[БОТ2] {msg}")
             send_telegram(msg)
             self.pos=None
             self.save()
@@ -217,78 +236,51 @@ class Trader:
         total=self.wins+self.losses
         wr=(self.wins/total*100) if total>0 else 0
         profit=self.bal-START_BALANCE
-        print(f"\n[БОТ1] {'─'*40}")
-        print(f"[БОТ1] 💰 Баланс: {self.bal:.2f} USDT ({profit:+.2f})")
-        print(f"[БОТ1] 📊 Позиция: {'Нет' if not self.pos else self.pos['side'].upper()}")
-        print(f"[БОТ1] 🏆 {self.wins}W/{self.losses}L | WR: {wr:.1f}%")
-        print(f"[БОТ1] {'─'*40}")
+        print(f"\n[БОТ2] {'─'*40}")
+        print(f"[БОТ2] 💰 Баланс: {self.bal:.2f} USDT ({profit:+.2f})")
+        print(f"[БОТ2] 📊 Позиция: {'Нет' if not self.pos else self.pos['side'].upper()}")
+        print(f"[БОТ2] 🏆 {self.wins}W/{self.losses}L | WR: {wr:.1f}%")
+        print(f"[БОТ2] {'─'*40}")
 
-def run_dashboard():
-    try:
-        from dashboard import app
-        port=int(os.environ.get('PORT', 8080))
-        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
-    except Exception as e:
-        print(f"Ошибка дашборда: {e}")
+def run_bot2(ex):
+    trader2=Trader2()
+    scan=0
+    symbols=get_top_volatile(ex, TOP_PAIRS)
+    print("\n[БОТ2] 🚀 Крипто-бот запущен! Стратегия: Аккумуляция→Манипуляция→FVG")
+    print(f"[БОТ2] Пары: {symbols}")
 
-ex=connect()
-symbols=get_top_volatile(ex, TOP_PAIRS)
+    while True:
+        try:
+            scan+=1
+            if scan==1 or scan%UPDATE_PAIRS_EVERY==0:
+                print(f"\n[БОТ2] 🔄 Обновляю список волатильных пар...")
+                symbols=get_top_volatile(ex, TOP_PAIRS)
 
-threading.Thread(target=run_dashboard, daemon=True).start()
-print("✅ Дашборд запущен!")
+            # Если открытая позиция держится по паре, выпавшей из топ-5 — всё равно
+            # продолжаем её мониторить (SL/TP), иначе trader2.pos никогда не
+            # обнулится и бот перестанет открывать новые сделки (тот же баг, что
+            # чинили в main.py для Бота 1).
+            active_symbols = symbols[:]
+            if trader2.pos and trader2.pos.get("symbol") not in active_symbols:
+                active_symbols.append(trader2.pos["symbol"])
 
-threading.Thread(target=run_bot2, args=(ex, symbols), daemon=True).start()
-print("✅ Бот 2 запущен!")
+            for symbol in active_symbols:
+                try:
+                    price=get_price(ex,symbol)
+                    trader2.check(price,symbol)
+                    if trader2.pos and trader2.pos.get("symbol")==symbol:
+                        print(f"[БОТ2] ⏳ {symbol}: {trader2.pos['side'].upper()} @ {trader2.pos['entry']:.5f} | SL:{trader2.pos['sl']:.5f} | TP2:{trader2.pos['tp2']:.5f}")
+                    else:
+                        sig,reason=get_signal2(ex,symbol)
+                        print(f"[БОТ2] {symbol}: {reason}")
+                        if sig and not trader2.pos:
+                            trader2.open(sig)
+                except Exception as e:
+                    print(f"[БОТ2] Ошибка {symbol}: {e}")
+                    continue
 
-threading.Thread(target=run_bot3, args=(ex,), daemon=True).start()
-print("✅ Бот 3 запущен!")
-
-trader=Trader()
-scan=0
-
-print(f"\n✅ Бот 1 запущен! Все 3 бота работают!\n")
-send_telegram(f"🚀 Все 3 бота запущены!\nБот1: BOS+OTE+SFP\nБот2: Аккум→FVG\nБот3: Форекс\nБаланс: {START_BALANCE} USDT")
-
-while True:
-    try:
-        scan+=1
-        if scan==1 or scan%UPDATE_PAIRS_EVERY==0:
-            print(f"\n🔄 Обновляю список волатильных пар...")
-            symbols=get_top_volatile(ex, TOP_PAIRS)
-
-        # ВАЖНО: если открытая позиция держится по паре, которая выпала из топ-5
-        # волатильных, её всё равно нужно продолжать мониторить (SL/TP), иначе
-        # trader.pos никогда не обнулится и бот перестанет открывать новые сделки.
-        active_symbols = symbols[:]
-        if trader.pos and trader.pos.get("symbol") not in active_symbols:
-            active_symbols.append(trader.pos["symbol"])
-
-        for symbol in active_symbols:
-            try:
-                price=get_price(ex,symbol)
-                print(f"\n[БОТ1] [{datetime.now().strftime('%H:%M:%S')}] {symbol}: {price:.4f}")
-                trader.check(price,symbol)
-                if trader.pos and trader.pos.get("symbol")==symbol:
-                    print(f"[БОТ1] ⏳ {trader.pos['side'].upper()} @ {trader.pos['entry']:.4f} | SL:{trader.pos['sl']:.4f} | TP2:{trader.pos['tp2']:.4f}")
-                else:
-                    df_mtf=fetch(ex,symbol,MTF,100)
-                    mtf_trend=bos(df_mtf)
-                    df_htf=fetch(ex,symbol,HTF,100)
-                    htf_trend=bos(df_htf)
-                    print(f"[БОТ1] 4H:{mtf_trend or 'нет'} | 1H:{htf_trend or 'нет'}")
-                    if htf_trend and not trader.pos:
-                        sig=signal(ex,symbol,htf_trend,mtf_trend)
-                        if sig: trader.open(sig)
-                        else: print(f"[БОТ1] Сигнала нет")
-            except Exception as e:
-                print(f"[БОТ1] Ошибка {symbol}: {e}")
-                continue
-        if scan%5==0: trader.status()
-        time.sleep(60)
-    except KeyboardInterrupt:
-        print("\nОстановлен.")
-        trader.status()
-        break
-    except Exception as e:
-        print(f"[БОТ1] Ошибка: {e}")
-        time.sleep(15)
+            if scan%5==0: trader2.status()
+            time.sleep(60)
+        except Exception as e:
+            print(f"[БОТ2] Ошибка: {e}")
+            time.sleep(15)
