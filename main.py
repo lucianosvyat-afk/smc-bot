@@ -255,7 +255,15 @@ while True:
         if scan==1 or scan%UPDATE_PAIRS_EVERY==0:
             print(f"\n🔄 Обновляю список волатильных пар...")
             symbols=get_top_volatile(ex, TOP_PAIRS)
-        for symbol in symbols:
+
+        # ВАЖНО: если открытая позиция держится по паре, которая выпала из топ-5
+        # волатильных, её всё равно нужно продолжать мониторить (SL/TP), иначе
+        # trader.pos никогда не обнулится и бот перестанет открывать новые сделки.
+        active_symbols = symbols[:]
+        if trader.pos and trader.pos.get("symbol") not in active_symbols:
+            active_symbols.append(trader.pos["symbol"])
+
+        for symbol in active_symbols:
             try:
                 price=get_price(ex,symbol)
                 print(f"\n[БОТ1] [{datetime.now().strftime('%H:%M:%S')}] {symbol}: {price:.4f}")
