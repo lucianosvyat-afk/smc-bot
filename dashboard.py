@@ -99,7 +99,7 @@ HTML = """
                 <div class="stat"><div class="stat-label">Wins</div><div class="stat-value green" id="b1-wins">0</div></div>
                 <div class="stat"><div class="stat-label">Losses</div><div class="stat-value red" id="b1-losses">0</div></div>
             </div>
-            <div class="pos-block" id="b1-pos">📊 Позиция: Нет</div>
+            <div class="pos-block" id="b1-pos">📊 Позиции: Нет</div>
         </div>
 
         <div class="bot-panel bot2-panel">
@@ -114,7 +114,7 @@ HTML = """
                 <div class="stat"><div class="stat-label">Wins</div><div class="stat-value green" id="b2-wins">0</div></div>
                 <div class="stat"><div class="stat-label">Losses</div><div class="stat-value red" id="b2-losses">0</div></div>
             </div>
-            <div class="pos-block" id="b2-pos">📊 Позиция: Нет</div>
+            <div class="pos-block" id="b2-pos">📊 Позиции: Нет</div>
         </div>
 
         <div class="bot-panel bot3-panel">
@@ -129,7 +129,7 @@ HTML = """
                 <div class="stat"><div class="stat-label">Wins</div><div class="stat-value green" id="b3-wins">0</div></div>
                 <div class="stat"><div class="stat-label">Losses</div><div class="stat-value red" id="b3-losses">0</div></div>
             </div>
-            <div class="pos-block" id="b3-pos">📊 Позиция: Нет</div>
+            <div class="pos-block" id="b3-pos">📊 Позиции: Нет</div>
             <div id="b3-session" class="session-off" style="margin-top:6px;text-align:center">🔴 Сессия закрыта</div>
         </div>
     </div>
@@ -370,18 +370,25 @@ HTML = """
             document.getElementById(prefix+'-total').textContent = total;
             document.getElementById(prefix+'-wins').textContent = data.wins;
             document.getElementById(prefix+'-losses').textContent = data.losses;
-            if (data.position) {
-                const pos = data.position;
-                const posId = registerTrade(Object.assign({}, pos, {result:'open'}), prefix);
+            const positions = data.positions || {};
+            const posSymbols = Object.keys(positions);
+            if (posSymbols.length > 0) {
+                const lines = posSymbols.map(sym => {
+                    const pos = positions[sym];
+                    const posId = registerTrade(Object.assign({}, pos, {result:'open'}), prefix);
+                    return `<div style="margin-bottom:4px">
+                        <b style="color:${pos.side==='buy'?'#58a6ff':'#d29922'}">${pos.side.toUpperCase()}</b>
+                        <button class="trade-link" onclick="openTradeChart('${posId}')">${(pos.symbol||sym).replace('/USDT:USDT','')} 📈</button>
+                        @ <span style="color:#58a6ff">${parseFloat(pos.entry||0).toFixed(4)}</span>
+                        | SL:<span style="color:#f85149"> ${parseFloat(pos.sl||0).toFixed(4)}</span>
+                        | TP1:<span style="color:#d29922"> ${parseFloat(pos.tp1||0).toFixed(4)}</span>
+                        | TP2:<span style="color:#3fb950"> ${parseFloat(pos.tp2||0).toFixed(4)}</span>
+                    </div>`;
+                });
                 document.getElementById(prefix+'-pos').innerHTML =
-                    `<b style="color:${pos.side==='buy'?'#58a6ff':'#d29922'}">${pos.side.toUpperCase()}</b>
-                     <button class="trade-link" onclick="openTradeChart('${posId}')">${(pos.symbol||'').replace('/USDT:USDT','')} 📈</button>
-                     @ <span style="color:#58a6ff">${parseFloat(pos.entry||0).toFixed(4)}</span>
-                     | SL:<span style="color:#f85149"> ${parseFloat(pos.sl||0).toFixed(4)}</span>
-                     | TP1:<span style="color:#d29922"> ${parseFloat(pos.tp1||0).toFixed(4)}</span>
-                     | TP2:<span style="color:#3fb950"> ${parseFloat(pos.tp2||0).toFixed(4)}</span>`;
+                    `<div style="color:#8b949e;font-size:10px;margin-bottom:4px">Открыто: ${posSymbols.length}</div>` + lines.join('');
             } else {
-                document.getElementById(prefix+'-pos').textContent = '📊 Позиция: Нет';
+                document.getElementById(prefix+'-pos').textContent = '📊 Позиции: Нет';
             }
             return { total, wr: parseFloat(wr), balance: data.balance };
         }
@@ -518,13 +525,13 @@ def api_all():
         from database import get_all_states
         return jsonify(get_all_states())
     except Exception as e:
-        default = {"balance":1000,"wins":0,"losses":0,"trades":[],"daily_trades":0,"daily_loss":0,"position":None}
+        default = {"balance":1000,"wins":0,"losses":0,"trades":[],"daily_trades":0,"daily_loss":0,"positions":{}}
         return jsonify({"bot1":default.copy(),"bot2":default.copy(),"bot3":default.copy()})
         try:
             if os.path.exists(filename):
                 with open(filename) as f:
                     d = json.load(f)
-                    d.setdefault("position", None)
+                    d.setdefault("positions", {})
                     d.setdefault("trades", [])
                     return d
         except: pass
@@ -538,12 +545,12 @@ def api_all():
 @app.route('/api/compare')
 def api_compare():
     def load(filename):
-        default = {"balance":1000,"wins":0,"losses":0,"trades":[],"position":None}
+        default = {"balance":1000,"wins":0,"losses":0,"trades":[],"positions":{}}
         try:
             if os.path.exists(filename):
                 with open(filename) as f:
                     d = json.load(f)
-                    d.setdefault("position", None)
+                    d.setdefault("positions", {})
                     d.setdefault("trades", [])
                     return d
         except: pass
@@ -556,7 +563,7 @@ def api_compare():
 @app.route('/api/data')
 def api_data():
     def load(filename):
-        default = {"balance":1000,"wins":0,"losses":0,"trades":[],"daily_trades":0,"daily_loss":0,"position":None,"max_daily":3}
+        default = {"balance":1000,"wins":0,"losses":0,"trades":[],"daily_trades":0,"daily_loss":0,"positions":{},"max_daily":3}
         try:
             if os.path.exists(filename):
                 with open(filename) as f:
