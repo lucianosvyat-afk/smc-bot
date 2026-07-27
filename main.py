@@ -2,6 +2,7 @@ import ccxt, pandas as pd, numpy as np, time, requests, json, os, threading
 from datetime import datetime
 from bot2 import run_bot2
 from bot3_forex import run_bot3
+from bot4 import run_bot4
 from database import load_state, save_stats, save_trade, connect_db, try_claim_position, update_position, release_position
 
 LTF="15m"; HTF="1h"; MTF="4h"
@@ -257,11 +258,14 @@ print("✅ Бот 2 запущен!")
 threading.Thread(target=run_bot3, args=(ex,), daemon=True).start()
 print("✅ Бот 3 запущен!")
 
+threading.Thread(target=run_bot4, args=(ex,), daemon=True).start()
+print("✅ Бот 4 запущен!")
+
 trader=Trader()
 scan=0
 
 print(f"\n✅ Бот 1 запущен! Все 3 бота работают!\n")
-send_telegram(f"🚀 Все 3 бота запущены!\nБот1: BOS+OTE+SFP\nБот2: Аккум→FVG\nБот3: Форекс\nБаланс: {START_BALANCE} USDT")
+send_telegram(f"🚀 Все 4 бота запущены!\nБот1: BOS+OTE+SFP\nБот2: Аккум→FVG\nБот3: Форекс\nБот4: Mean Reversion\nБаланс: {START_BALANCE} USDT")
 
 while True:
     try:
