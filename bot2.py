@@ -5,7 +5,7 @@ from database import load_state, save_state, save_trade
 LTF="15m"; MTF="1h"; HTF="4h"
 LEVERAGE=10; RISK_PERCENT=0.5
 START_BALANCE=1000.0; SWING_LOOKBACK=5
-TOP_PAIRS=5; UPDATE_PAIRS_EVERY=30
+TOP_PAIRS=20; UPDATE_PAIRS_EVERY=30  # шире пул пар — аккумуляция редко бывает у топ-5 по волатильности
 MAX_DAILY_TRADES=2; DAILY_STOP_LOSS=2.0
 TP1_RR=1.5; TP2_RR=3.0
 
@@ -29,21 +29,22 @@ def fetch(ex,sym,tf,limit=200):
 def get_price(ex,sym):
     return ex.fetch_ticker(sym)["last"]
 
-def get_top_volatile(ex, top_n=5):
+def get_liquid_pairs(ex, top_n=20):
+    """Широкий пул пар по объёму торгов, БЕЗ фильтра по волатильности за 24ч.
+    Для стратегии аккумуляции это важно: если пара уже сильно двигалась
+    последние сутки — она по определению не в тихом боковике, топ-5 самых
+    волатильных пар почти никогда не совпадают с аккумуляцией."""
     try:
         tickers=ex.fetch_tickers()
         pairs=[]
         for symbol, t in tickers.items():
             if "USDT:USDT" not in symbol: continue
-            if not t.get("percentage"): continue
-            volatility=abs(t.get("percentage",0))
-            if volatility < 1: continue
-            pairs.append({"symbol":symbol,"volatility":volatility,"change":t["percentage"]})
-        pairs.sort(key=lambda x: x["volatility"], reverse=True)
+            vol=t.get("quoteVolume") or t.get("baseVolume") or 0
+            if not vol: continue
+            pairs.append({"symbol":symbol,"volume":vol})
+        pairs.sort(key=lambda x: x["volume"], reverse=True)
         top=pairs[:top_n]
-        print(f"[БОТ2]   Найдено пар: {len(pairs)}, беру топ {top_n}")
-        for i,p in enumerate(top,1):
-            print(f"[БОТ2]   {i}. {p['symbol']} | {p['change']:+.1f}%")
+        print(f"[БОТ2]   Найдено ликвидных пар: {len(pairs)}, беру топ {top_n}")
         if not top:
             return ["BTC/USDT:USDT","ETH/USDT:USDT","SOL/USDT:USDT","BNB/USDT:USDT","XRP/USDT:USDT"]
         return [p["symbol"] for p in top]
@@ -96,7 +97,7 @@ def get_signal2(ex, symbol):
         df_mtf=fetch(ex,symbol,MTF,100)
         df_ltf=fetch(ex,symbol,LTF,100)
         price=df_ltf["close"].iloc[-1]
-        accum=detect_accumulation(df_htf,lookback=20,threshold=0.04)
+        accum=detect_accumulation(df_htf,lookback=20,threshold=0.07)  # было 0.04 — почти никогда не срабатывал
         if not accum["is_accumulation"]:
             return None, "Нет аккумуляции"
         manip=detect_manipulation(df_mtf,accum)
@@ -246,7 +247,7 @@ class Trader2:
 def run_bot2(ex):
     trader2=Trader2()
     scan=0
-    symbols=get_top_volatile(ex, TOP_PAIRS)
+    symbols=get_liquid_pairs(ex, TOP_PAIRS)
     print("\n[БОТ2] 🚀 Крипто-бот запущен! Стратегия: Аккумуляция→Манипуляция→FVG")
     print(f"[БОТ2] Пары: {symbols}")
 
@@ -255,7 +256,7 @@ def run_bot2(ex):
             scan+=1
             if scan==1 or scan%UPDATE_PAIRS_EVERY==0:
                 print(f"\n[БОТ2] 🔄 Обновляю список волатильных пар...")
-                symbols=get_top_volatile(ex, TOP_PAIRS)
+                symbols=get_liquid_pairs(ex, TOP_PAIRS)
 
             # Если открытая позиция держится по паре, выпавшей из топ-5 — всё равно
             # продолжаем её мониторить (SL/TP), иначе trader2.pos никогда не
