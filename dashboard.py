@@ -18,15 +18,17 @@ HTML = """
         .header h1 { color:#58a6ff; font-size:22px; }
         .dot { width:10px; height:10px; border-radius:50%; background:#3fb950; animation:pulse 2s infinite; display:inline-block; margin-right:6px; }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
-        .bots-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:15px; padding:20px 30px; }
+        .bots-grid { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:15px; padding:20px 30px; }
         .bot-panel { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:18px; }
         .bot1-panel { border-top:3px solid #58a6ff; }
         .bot2-panel { border-top:3px solid #3fb950; }
         .bot3-panel { border-top:3px solid #d29922; }
+        .bot4-panel { border-top:3px solid #a371f7; }
         .bot-title { font-size:14px; font-weight:700; margin-bottom:12px; }
         .bot1-title { color:#58a6ff; }
         .bot2-title { color:#3fb950; }
         .bot3-title { color:#d29922; }
+        .bot4-title { color:#a371f7; }
         .stats-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:10px; }
         .stat { background:#0d1117; border-radius:8px; padding:10px; text-align:center; }
         .stat-label { color:#8b949e; font-size:10px; text-transform:uppercase; margin-bottom:3px; }
@@ -40,7 +42,7 @@ HTML = """
         .compare-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:15px; }
         .compare-card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:18px; text-align:center; }
         .trades-section { padding:0 30px 30px; }
-        .trades-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:15px; }
+        .trades-grid { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:15px; }
         .trades-card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:18px; overflow-x:auto; }
         .trades-title { font-size:12px; font-weight:600; margin-bottom:12px; }
         table { width:100%; border-collapse:collapse; font-size:11px; min-width:500px; }
@@ -56,6 +58,7 @@ HTML = """
         .red { color:#f85149; }
         .blue { color:#58a6ff; }
         .yellow { color:#d29922; }
+        .purple { color:#a371f7; }
         .session-on { color:#3fb950; font-size:11px; }
         .session-off { color:#f85149; font-size:11px; }
         .price-entry { color:#58a6ff; font-weight:600; }
@@ -132,6 +135,21 @@ HTML = """
             <div class="pos-block" id="b3-pos">📊 Позиции: Нет</div>
             <div id="b3-session" class="session-off" style="margin-top:6px;text-align:center">🔴 Сессия закрыта</div>
         </div>
+
+        <div class="bot-panel bot4-panel">
+            <div class="bot-title bot4-title">🟣 Бот 4 — Mean Reversion</div>
+            <div class="stats-grid">
+                <div class="stat"><div class="stat-label">Баланс</div><div class="stat-value purple" id="b4-balance">1000</div></div>
+                <div class="stat"><div class="stat-label">WinRate</div><div class="stat-value" id="b4-wr">0%</div></div>
+                <div class="stat"><div class="stat-label">Прибыль</div><div class="stat-value" id="b4-profit">0</div></div>
+            </div>
+            <div class="stats-grid">
+                <div class="stat"><div class="stat-label">Сделок</div><div class="stat-value" id="b4-total">0</div></div>
+                <div class="stat"><div class="stat-label">Wins</div><div class="stat-value green" id="b4-wins">0</div></div>
+                <div class="stat"><div class="stat-label">Losses</div><div class="stat-value red" id="b4-losses">0</div></div>
+            </div>
+            <div class="pos-block" id="b4-pos">📊 Позиции: Нет</div>
+        </div>
     </div>
 
     <div class="compare-section">
@@ -190,6 +208,14 @@ HTML = """
                 </table>
                 <div id="b3-empty" style="text-align:center;color:#8b949e;padding:15px;font-size:12px">Ждём торговой сессии...</div>
             </div>
+            <div class="trades-card">
+                <div class="trades-title bot4-title">📋 Бот 4 — Mean Reversion</div>
+                <table>
+                    <thead><tr><th>Время</th><th>Пара</th><th>Сторона</th><th>Вход</th><th>Выход</th><th>SL / TP1 / TP2</th><th>PnL</th><th>Итог</th></tr></thead>
+                    <tbody id="b4-trades"></tbody>
+                </table>
+                <div id="b4-empty" style="text-align:center;color:#8b949e;padding:15px;font-size:12px">Сделок пока нет...</div>
+            </div>
         </div>
     </div>
 
@@ -206,7 +232,8 @@ HTML = """
                     datasets: [
                         { label:'Бот 1', data:[START], borderColor:'#58a6ff', backgroundColor:'rgba(88,166,255,0.05)', fill:true, tension:0.4, pointRadius:3 },
                         { label:'Бот 2', data:[START], borderColor:'#3fb950', backgroundColor:'rgba(63,185,80,0.05)', fill:true, tension:0.4, pointRadius:3 },
-                        { label:'Бот 3 (Форекс)', data:[START], borderColor:'#d29922', backgroundColor:'rgba(210,153,34,0.05)', fill:true, tension:0.4, pointRadius:3 }
+                        { label:'Бот 3 (Форекс)', data:[START], borderColor:'#d29922', backgroundColor:'rgba(210,153,34,0.05)', fill:true, tension:0.4, pointRadius:3 },
+                        { label:'Бот 4 (MeanRev)', data:[START], borderColor:'#a371f7', backgroundColor:'rgba(163,113,247,0.05)', fill:true, tension:0.4, pointRadius:3 }
                     ]
                 },
                 options: {
@@ -223,7 +250,7 @@ HTML = """
             barChart = new Chart(ctx2, {
                 type:'bar',
                 data:{
-                    labels:['Бот 1','Бот 2','Бот 3'],
+                    labels:['Бот 1','Бот 2','Бот 3','Бот 4'],
                     datasets:[
                         { label:'Wins', data:[0,0,0], backgroundColor:'#3fb950' },
                         { label:'Losses', data:[0,0,0], backgroundColor:'#f85149' }
@@ -241,8 +268,8 @@ HTML = """
         }
 
         // Реестр сделок для модалки с графиком (id -> данные сделки)
-        const BOT_TF = {b1:'15m', b2:'15m', b3:'5m'};
-        const BOT_NAME = {b1:'Бот 1', b2:'Бот 2', b3:'Бот 3'};
+        const BOT_TF = {b1:'15m', b2:'15m', b3:'5m', b4:'15m'};
+        const BOT_NAME = {b1:'Бот 1', b2:'Бот 2', b3:'Бот 3', b4:'Бот 4'};
         let tradeRegistry = {};
         let tradeRegistryCounter = 0;
         function registerTrade(t, prefix) {
@@ -449,6 +476,7 @@ HTML = """
                 const s1 = updateBot(d.bot1, 'b1');
                 const s2 = updateBot(d.bot2, 'b2');
                 const s3 = updateBot(d.bot3, 'b3');
+                const s4 = updateBot(d.bot4, 'b4');
 
                 const hour = new Date().getUTCHours();
                 const day = new Date().getUTCDay();
@@ -460,32 +488,36 @@ HTML = """
                 const bots = [
                     {name:'🔵 Бот 1', bal:s1.balance, wr:s1.wr},
                     {name:'🟢 Бот 2', bal:s2.balance, wr:s2.wr},
-                    {name:'🟡 Бот 3', bal:s3.balance, wr:s3.wr}
+                    {name:'🟡 Бот 3', bal:s3.balance, wr:s3.wr},
+                    {name:'🟣 Бот 4', bal:s4.balance, wr:s4.wr}
                 ];
                 const leaderBal = bots.reduce((a,b) => a.bal>b.bal?a:b);
                 const leaderWR = bots.reduce((a,b) => a.wr>b.wr?a:b);
                 document.getElementById('leader-balance').textContent = leaderBal.name + ' (' + leaderBal.bal.toFixed(2) + '$)';
                 document.getElementById('leader-wr').textContent = leaderWR.name + ' (' + leaderWR.wr + '%)';
-                document.getElementById('total-trades').textContent = s1.total + s2.total + s3.total;
+                document.getElementById('total-trades').textContent = s1.total + s2.total + s3.total + s4.total;
 
                 const v1 = buildEquity(d.bot1.trades);
                 const v2 = buildEquity(d.bot2.trades);
                 const v3 = buildEquity(d.bot3.trades);
-                const maxLen = Math.max(v1.length, v2.length, v3.length);
+                const v4 = buildEquity(d.bot4.trades);
+                const maxLen = Math.max(v1.length, v2.length, v3.length, v4.length);
                 const labels = Array.from({length:maxLen},(_,i)=>i===0?'Старт':'#'+i);
                 equityChart.data.labels = labels;
                 equityChart.data.datasets[0].data = v1;
                 equityChart.data.datasets[1].data = v2;
                 equityChart.data.datasets[2].data = v3;
+                equityChart.data.datasets[3].data = v4;
                 equityChart.update();
 
-                barChart.data.datasets[0].data = [d.bot1.wins, d.bot2.wins, d.bot3.wins];
-                barChart.data.datasets[1].data = [d.bot1.losses, d.bot2.losses, d.bot3.losses];
+                barChart.data.datasets[0].data = [d.bot1.wins, d.bot2.wins, d.bot3.wins, d.bot4.wins];
+                barChart.data.datasets[1].data = [d.bot1.losses, d.bot2.losses, d.bot3.losses, d.bot4.losses];
                 barChart.update();
 
                 renderTrades(d.bot1.trades, 'b1-trades', 'b1-empty', 'b1');
                 renderTrades(d.bot2.trades, 'b2-trades', 'b2-empty', 'b2');
                 renderTrades(d.bot3.trades, 'b3-trades', 'b3-empty', 'b3');
+                renderTrades(d.bot4.trades, 'b4-trades', 'b4-empty', 'b4');
 
                 document.getElementById('lastUpdate').textContent = 'Обновлено: ' + new Date().toLocaleTimeString();
             } catch(e) { console.error(e); }
@@ -525,8 +557,9 @@ def api_all():
         from database import get_all_states
         return jsonify(get_all_states())
     except Exception as e:
+        print(f"Ошибка /api/all: {e}")
         default = {"balance":1000,"wins":0,"losses":0,"trades":[],"daily_trades":0,"daily_loss":0,"positions":{}}
-        return jsonify({"bot1":default.copy(),"bot2":default.copy(),"bot3":default.copy()})
+        return jsonify({"bot1":default.copy(),"bot2":default.copy(),"bot3":default.copy(),"bot4":default.copy()})
         try:
             if os.path.exists(filename):
                 with open(filename) as f:
