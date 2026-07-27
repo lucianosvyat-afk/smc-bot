@@ -2,13 +2,14 @@ import ccxt, pandas as pd, numpy as np, time, requests, json, os, threading
 from datetime import datetime
 from bot2 import run_bot2
 from bot3_forex import run_bot3
-from database import load_state, save_state, save_trade, connect_db
+from database import load_state, save_stats, save_trade, connect_db, try_claim_position, update_position, release_position
 
 LTF="15m"; HTF="1h"; MTF="4h"
 LEVERAGE=10; RISK_PERCENT=1.0
 START_BALANCE=1000.0; SWING_LOOKBACK=5
 TOP_PAIRS=5; UPDATE_PAIRS_EVERY=30
 MAX_DAILY_TRADES=3; DAILY_STOP_LOSS=3.0
+MAX_CONCURRENT_POSITIONS=3  # сколько сделок по разным парам можно держать одновременно
 TP1_RR=1.0; TP2_RR=2.0
 
 TELEGRAM_TOKEN=""
@@ -119,13 +120,12 @@ class Trader:
         self.trades=state["trades"]
         self.daily_trades=state["daily_trades"]
         self.daily_loss=state["daily_loss"]
-        self.pos=state["position"]
+        self.positions=state["positions"]  # symbol -> позиция; несколько параллельных сделок
         self.last_day=datetime.now().date()
-        print(f"[БОТ1] Загружено | Баланс: {self.bal:.2f} USDT | Сделок: {len(self.trades)}")
+        print(f"[БОТ1] Загружено | Баланс: {self.bal:.2f} USDT | Сделок: {len(self.trades)} | Открыто сейчас: {len(self.positions)}")
 
-    def save(self):
-        save_state("bot1", self.bal, self.wins, self.losses,
-                   self.daily_trades, self.daily_loss, self.pos)
+    def save_stats(self):
+        save_stats("bot1", self.bal, self.wins, self.losses, self.daily_trades, self.daily_loss)
 
     def reset_daily(self):
         today=datetime.now().date()
@@ -141,16 +141,25 @@ class Trader:
         if self.daily_loss>=self.bal*(DAILY_STOP_LOSS/100):
             print(f"[БОТ1] ⛔ Дневной стоп-лосс достигнут")
             return False
+        if len(self.positions)>=MAX_CONCURRENT_POSITIONS:
+            print(f"[БОТ1] ⛔ Лимит одновременных позиций ({MAX_CONCURRENT_POSITIONS})")
+            return False
         return True
 
     def open(self,sig):
+        symbol=sig["symbol"]
+        if symbol in self.positions: return  # уже держим сделку по этой паре
         if not self.can_trade(): return
         risk=self.bal*(RISK_PERCENT/100)
         sl_d=abs(sig["entry"]-sig["sl"])
         qty=(risk/sl_d)*LEVERAGE if sl_d>0 else 0
-        self.pos={**sig,"qty":qty,"opened_at":datetime.now().strftime("%Y-%m-%d %H:%M")}
+        new_pos={**sig,"qty":qty,"opened_at":datetime.now().strftime("%Y-%m-%d %H:%M")}
+        if not try_claim_position("bot1", symbol, new_pos):
+            print(f"[БОТ1] ⚠️ {symbol}: позиция уже открыта другим инстансом бота — пропускаю дубль")
+            return
+        self.positions[symbol]=new_pos
         self.daily_trades+=1
-        self.save()
+        self.save_stats()
         msg=(f"{'📈' if sig['side']=='buy' else '📉'} ПОЗИЦИЯ: {sig['side'].upper()}\n"
              f"Пара: {sig['symbol']}\n"
              f"Стратегия: {sig.get('strategy','')}\n"
@@ -158,28 +167,30 @@ class Trader:
              f"SL: {sig['sl']:.4f}\n"
              f"TP1: {sig['tp1']:.4f}\n"
              f"TP2: {sig['tp2']:.4f}\n"
-             f"Риск: {risk:.2f} USDT")
+             f"Риск: {risk:.2f} USDT\n"
+             f"Открыто сейчас: {len(self.positions)}/{MAX_CONCURRENT_POSITIONS}")
         print(f"\n[БОТ1] {'='*40}\n{msg}\n{'='*40}")
         send_telegram(msg)
 
     def check(self,price,symbol):
-        if not self.pos: return
-        if self.pos.get("symbol")!=symbol: return
-        s=self.pos["side"]
-        entry=self.pos["entry"]
-        sl=self.pos["sl"]
-        tp1=self.pos["tp1"]
-        tp2=self.pos["tp2"]
-        qty=self.pos["qty"]
-        if not self.pos["qty_closed"]:
+        pos=self.positions.get(symbol)
+        if not pos: return
+        s=pos["side"]
+        entry=pos["entry"]
+        sl=pos["sl"]
+        tp1=pos["tp1"]
+        tp2=pos["tp2"]
+        qty=pos["qty"]
+        if not pos["qty_closed"]:
             hit_tp1=(s=="buy" and price>=tp1) or (s=="sell" and price<=tp1)
             if hit_tp1:
                 pnl_half=(tp1-entry)*(qty/2) if s=="buy" else (entry-tp1)*(qty/2)
                 self.bal+=pnl_half
-                self.pos["qty_closed"]=True
-                self.pos["sl"]=entry
-                self.pos["qty"]=qty/2
-                self.save()
+                pos["qty_closed"]=True
+                pos["sl"]=entry
+                pos["qty"]=qty/2
+                update_position("bot1", symbol, pos)
+                self.save_stats()
                 msg=f"⚡ ЧАСТИЧНОЕ ЗАКРЫТИЕ 50%\n{symbol} | PnL: +{pnl_half:.2f} USDT\nБаланс: {self.bal:.2f}"
                 print(f"\n[БОТ1] {msg}")
                 send_telegram(msg)
@@ -188,7 +199,7 @@ class Trader:
         hit_sl=(s=="buy" and price<=sl) or (s=="sell" and price>=sl)
         if hit_tp2 or hit_sl:
             ep=tp2 if hit_tp2 else sl
-            pnl=(ep-entry)*self.pos["qty"] if s=="buy" else (entry-ep)*self.pos["qty"]
+            pnl=(ep-entry)*pos["qty"] if s=="buy" else (entry-ep)*pos["qty"]
             self.bal+=pnl
             if pnl<0: self.daily_loss+=abs(pnl)
             if hit_tp2: self.wins+=1
@@ -197,12 +208,12 @@ class Trader:
                 "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "symbol": symbol, "side": s,
                 "entry": entry, "exit": ep,
-                "sl": self.pos.get("sl",0),
+                "sl": pos.get("sl",0),
                 "tp1": tp1, "tp2": tp2,
                 "pnl": round(pnl,2),
                 "result": "win" if hit_tp2 else "loss",
-                "strategy": self.pos.get("strategy","BOS+OTE+SFP"),
-                "opened_at": self.pos.get("opened_at")
+                "strategy": pos.get("strategy","BOS+OTE+SFP"),
+                "opened_at": pos.get("opened_at")
             }
             save_trade(trade, "bot1")
             msg=(f"{'✅ ТЕЙК ПРОФИТ' if hit_tp2 else '❌ СТОП ЛОСС'}\n"
@@ -211,16 +222,18 @@ class Trader:
                  f"Баланс: {self.bal:.2f} USDT")
             print(f"\n[БОТ1] {msg}")
             send_telegram(msg)
-            self.pos=None
-            self.save()
+            del self.positions[symbol]
+            release_position("bot1", symbol)
+            self.save_stats()
 
     def status(self):
         total=self.wins+self.losses
         wr=(self.wins/total*100) if total>0 else 0
         profit=self.bal-START_BALANCE
+        pos_desc=", ".join(f"{s}:{p['side'].upper()}" for s,p in self.positions.items()) or "Нет"
         print(f"\n[БОТ1] {'─'*40}")
         print(f"[БОТ1] 💰 Баланс: {self.bal:.2f} USDT ({profit:+.2f})")
-        print(f"[БОТ1] 📊 Позиция: {'Нет' if not self.pos else self.pos['side'].upper()}")
+        print(f"[БОТ1] 📊 Позиции ({len(self.positions)}/{MAX_CONCURRENT_POSITIONS}): {pos_desc}")
         print(f"[БОТ1] 🏆 {self.wins}W/{self.losses}L | WR: {wr:.1f}%")
         print(f"[БОТ1] {'─'*40}")
 
@@ -259,25 +272,28 @@ while True:
 
         # ВАЖНО: если открытая позиция держится по паре, которая выпала из топ-5
         # волатильных, её всё равно нужно продолжать мониторить (SL/TP), иначе
-        # trader.pos никогда не обнулится и бот перестанет открывать новые сделки.
+        # эта позиция никогда не закроется. Теперь позиций может быть несколько
+        # параллельно (по разным парам) — добавляем в мониторинг все их символы.
         active_symbols = symbols[:]
-        if trader.pos and trader.pos.get("symbol") not in active_symbols:
-            active_symbols.append(trader.pos["symbol"])
+        for sym in trader.positions:
+            if sym not in active_symbols:
+                active_symbols.append(sym)
 
         for symbol in active_symbols:
             try:
                 price=get_price(ex,symbol)
                 print(f"\n[БОТ1] [{datetime.now().strftime('%H:%M:%S')}] {symbol}: {price:.4f}")
                 trader.check(price,symbol)
-                if trader.pos and trader.pos.get("symbol")==symbol:
-                    print(f"[БОТ1] ⏳ {trader.pos['side'].upper()} @ {trader.pos['entry']:.4f} | SL:{trader.pos['sl']:.4f} | TP2:{trader.pos['tp2']:.4f}")
+                if symbol in trader.positions:
+                    p=trader.positions[symbol]
+                    print(f"[БОТ1] ⏳ {p['side'].upper()} @ {p['entry']:.4f} | SL:{p['sl']:.4f} | TP2:{p['tp2']:.4f}")
                 else:
                     df_mtf=fetch(ex,symbol,MTF,100)
                     mtf_trend=bos(df_mtf)
                     df_htf=fetch(ex,symbol,HTF,100)
                     htf_trend=bos(df_htf)
                     print(f"[БОТ1] 4H:{mtf_trend or 'нет'} | 1H:{htf_trend or 'нет'}")
-                    if htf_trend and not trader.pos:
+                    if htf_trend:
                         sig=signal(ex,symbol,htf_trend,mtf_trend)
                         if sig: trader.open(sig)
                         else: print(f"[БОТ1] Сигнала нет")
