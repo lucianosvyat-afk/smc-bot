@@ -164,10 +164,10 @@ def load_state(bot_name, start_balance=1000.0):
 def get_all_states():
     if db is None:
         default = {"balance":1000,"wins":0,"losses":0,"trades":[],"daily_trades":0,"daily_loss":0,"positions":{}}
-        return {"bot1":default.copy(),"bot2":default.copy(),"bot3":default.copy()}
+        return {"bot1":default.copy(),"bot2":default.copy(),"bot3":default.copy(),"bot4":default.copy()}
 
     result = {}
-    for bot_name in ["bot1","bot2","bot3"]:
+    for bot_name in ["bot1","bot2","bot3","bot4"]:
         try:
             state = db["states"].find_one({"bot": bot_name})
             trades = list(db["trades"].find(
