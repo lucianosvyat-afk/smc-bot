@@ -46,6 +46,8 @@ START_BALANCE=1000.0; SWING_LOOKBACK=5
 MAX_DAILY_TRADES=3; DAILY_STOP_LOSS=2.0
 MAX_CONCURRENT_POSITIONS=3  # сколько сделок по разным парам можно держать одновременно
 TP1_RR=1.5; TP2_RR=3.0
+TAKER_FEE=0.00075  # BitMEX/форекс-своп обычно чуть дороже крипто-своп OKX (~0.075% за сторону)
+FUNDING_RATE_8H=0.0001
 
 TELEGRAM_TOKEN=""
 TELEGRAM_CHAT_ID=""
@@ -216,8 +218,8 @@ class Trader3:
         if not self.can_trade(): return
         risk=self.bal*(RISK_PERCENT/100)
         sl_d=abs(sig["entry"]-sig["sl"])
-        qty=(risk/sl_d)*LEVERAGE if sl_d>0 else 0
-        new_pos={**sig,"qty":qty,"opened_at":datetime.now().strftime("%Y-%m-%d %H:%M")}
+        qty=(risk/sl_d) if sl_d>0 else 0  # без *LEVERAGE — иначе риск на сделку в LEVERAGE раз больше заявленного
+        new_pos={**sig,"qty":qty,"qty_full":qty,"opened_at":datetime.now().strftime("%Y-%m-%d %H:%M")}
         if not try_claim_position("bot3", symbol, new_pos):
             print(f"[БОТ3] ⚠️ {symbol}: позиция уже открыта другим инстансом бота — пропускаю дубль")
             return
@@ -245,17 +247,21 @@ class Trader3:
         tp1=pos["tp1"]
         tp2=pos["tp2"]
         qty=pos["qty"]
+        qty_full=pos.get("qty_full", qty)
+        entry_fee_total=qty_full*entry*TAKER_FEE
         if not pos["qty_closed"]:
             hit_tp1=(s=="buy" and price>=tp1) or (s=="sell" and price<=tp1)
             if hit_tp1:
                 pnl_half=(tp1-entry)*(qty/2) if s=="buy" else (entry-tp1)*(qty/2)
+                fee_half=(entry_fee_total/2)+((qty/2)*tp1*TAKER_FEE)
+                pnl_half-=fee_half
                 self.bal+=pnl_half
                 pos["qty_closed"]=True
                 pos["sl"]=entry
                 pos["qty"]=qty/2
                 update_position("bot3", symbol, pos)
                 self.save_stats()
-                msg=f"⚡ 50% закрыто\n{symbol}\nTP1: {tp1:.5f}\nPnL: +{pnl_half:.2f} USDT\nБаланс: {self.bal:.2f}"
+                msg=f"⚡ 50% закрыто\n{symbol}\nTP1: {tp1:.5f}\nPnL: +{pnl_half:.2f} USDT (комиссия учтена)\nБаланс: {self.bal:.2f}"
                 print(f"\n[БОТ3] {msg}")
                 send_telegram(msg)
                 return
@@ -264,6 +270,15 @@ class Trader3:
         if hit_tp2 or hit_sl:
             ep=tp2 if hit_tp2 else sl
             pnl=(ep-entry)*pos["qty"] if s=="buy" else (entry-ep)*pos["qty"]
+            entry_fee_remaining=entry_fee_total/2 if pos["qty_closed"] else entry_fee_total
+            exit_fee=pos["qty"]*ep*TAKER_FEE
+            try:
+                opened_dt=datetime.strptime(pos.get("opened_at",""), "%Y-%m-%d %H:%M")
+                hours_held=max((datetime.now()-opened_dt).total_seconds()/3600, 0)
+            except Exception:
+                hours_held=0
+            funding_cost=qty_full*entry*FUNDING_RATE_8H*(hours_held/8)
+            pnl-=(entry_fee_remaining+exit_fee+funding_cost)
             self.bal+=pnl
             if pnl<0: self.daily_loss+=abs(pnl)
             if hit_tp2: self.wins+=1
