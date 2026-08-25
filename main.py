@@ -6,7 +6,7 @@ from bot4 import run_bot4
 from database import load_state, save_stats, save_trade, connect_db, try_claim_position, update_position, release_position
 
 LTF="15m"; HTF="1h"; MTF="4h"
-LEVERAGE=10; RISK_PERCENT=1.0
+LEVERAGE=10; RISK_PERCENT=5.0  # x5 от базового 1.0 по просьбе — без возврата бага с *LEVERAGE в qty
 START_BALANCE=1000.0; SWING_LOOKBACK=5
 TOP_PAIRS=5; UPDATE_PAIRS_EVERY=30
 MAX_DAILY_TRADES=3; DAILY_STOP_LOSS=3.0
