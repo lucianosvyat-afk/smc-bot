@@ -16,7 +16,7 @@ from database import load_state, save_stats, save_trade, try_claim_position, upd
 # ============================================================
 
 HTF="4h"; LTF="15m"
-LEVERAGE=5; RISK_PERCENT=0.75
+LEVERAGE=5; RISK_PERCENT=3.75  # x5 от базового 0.75
 START_BALANCE=1000.0
 TOP_PAIRS=15; UPDATE_PAIRS_EVERY=30
 MAX_DAILY_TRADES=4; DAILY_STOP_LOSS=3.0
