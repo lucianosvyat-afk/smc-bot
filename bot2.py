@@ -3,7 +3,7 @@ from datetime import datetime
 from database import load_state, save_stats, save_trade, try_claim_position, update_position, release_position
 
 LTF="15m"; MTF="1h"; HTF="4h"
-LEVERAGE=10; RISK_PERCENT=0.5
+LEVERAGE=10; RISK_PERCENT=2.5  # x5 от базового 0.5
 START_BALANCE=1000.0; SWING_LOOKBACK=5
 TOP_PAIRS=20; UPDATE_PAIRS_EVERY=30  # шире пул пар — аккумуляция редко бывает у топ-5 по волатильности
 MAX_DAILY_TRADES=2; DAILY_STOP_LOSS=2.0
