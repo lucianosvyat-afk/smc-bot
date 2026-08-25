@@ -41,7 +41,7 @@ def resolve_fx_symbol(ex, cur_a, cur_b):
     return None
 
 LTF="5m"; MTF="15m"; HTF="1h"
-LEVERAGE=10; RISK_PERCENT=0.5
+LEVERAGE=10; RISK_PERCENT=2.5  # x5 от базового 0.5
 START_BALANCE=1000.0; SWING_LOOKBACK=5
 MAX_DAILY_TRADES=3; DAILY_STOP_LOSS=2.0
 MAX_CONCURRENT_POSITIONS=3  # сколько сделок по разным парам можно держать одновременно
